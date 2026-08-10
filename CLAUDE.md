@@ -355,7 +355,7 @@ wider `--skip`, not just `--skip orphans`.
     excluding it means `broken`/`untracked` stop covering it too.
   - **Derived / never-hand-edited → exclude** (`.docgraphignore`). Conforming is
     not available: the generator would drop any `type:` you added on the next
-    regen, so the edit can't survive. Reference instance: Locus's
+    regen, so the edit can't survive. Reference instance: a private client app's
     `database/*-seed/**` (a regenerated export read as source material).
   - **`--skip` is wrong for both** — it's **repo-wide**, so a corpus's conventions
     silently disable those checks on `CLAUDE.md`/`README.md` too, where they're

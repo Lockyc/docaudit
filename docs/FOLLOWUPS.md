@@ -90,7 +90,7 @@ used in the wild today:
 be redirected into a tracked file. That shape cannot single-source the common
 real case: **a hand-written doc whose index is one section among prose.**
 
-The driving case (Locus, 2026-07): its `CLAUDE.md` carries a *Reference
+The driving case (a private client app, 2026-07): its `CLAUDE.md` carries a *Reference
 Documentation* section listing all 39 `docs/*.md` with a description each. It is
 the same shadow as homelab's `tools.md` *Docs* column — a hand-maintained copy
 of a relation the graph already holds, which nothing validates and which rots
@@ -105,7 +105,7 @@ tools.md was:
   …"). Migrating them into frontmatter YAML makes prose that is edited often
   harder to edit, which is a real cost, not a purity nit.
 
-So the shadow stands in Locus, knowingly, until this is resolved. Two candidate
+So the shadow stands in that repo, knowingly, until this is resolved. Two candidate
 shapes, neither chosen:
 
 1. **Managed region** — `index --into <file> --marker <name>` rewrites only the
@@ -117,7 +117,7 @@ shapes, neither chosen:
    drift in exactly the way that matters least (descriptions) and not at all in
    the way that matters most (membership).
 
-The prerequisite for either is that a repo's docs carry `type` (Locus's now do).
+The prerequisite for either is that a repo's docs carry `type` (that repo's now do).
 Decide the shape before building — a half-generated section that still needs
 hand-editing may be worse than an honest hand-written one.
 
