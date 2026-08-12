@@ -153,6 +153,34 @@ expanded; a non-absolute `path` is a fatal config error).
     path  = "/abs/path/to/repo/sub"
     allow = ["some-project"]          # legit in this subtree
 
+Deny rules fall into **groups**. Top-level `terms` / `regex` are the implicit
+`default` group; a `[[group]]` block is a named deny list. A `[[dir]].ignore`
+glob silences **only the `default` group** unless `ignore_groups` names others —
+so a private repo can blanket-ignore its own footprint vocabulary while staying
+scanned for terms that must not appear in *any* repo:
+
+    terms = ['(?-i)AKIA[0-9A-Z]{16}']   # default group: secret shapes
+
+    [[group]]
+    name  = "footprint"
+    terms = ["acme-host", "/Users/you"]
+
+    [[group]]
+    name  = "client"
+    terms = ["big-client"]
+
+    [[dir]]
+    path          = "/abs/path/to/private-repo"
+    ignore        = ["**"]
+    ignore_groups = ["footprint"]     # footprint is fine here; client + secrets stay live
+
+`default` is reserved for the top-level rules — a `[[group]]` claiming it, a
+group with no name or a duplicate name, an `ignore_groups` naming an undefined
+group, or an `ignore_groups` with no `ignore` globs are all fatal config errors.
+`allow` / `allow_regex` are not group-scoped: naming the string suppresses it
+whatever group it belongs to, which is the per-repo escape hatch for a class the
+repo legitimately owns.
+
 **The config is the sole source of rules — no hidden built-ins.** Generic secret
 shapes (PEM, AWS, GitHub, Slack) are just `regex` entries you add, with a leading
 `(?-i)` to keep them case-sensitive:
@@ -189,7 +217,8 @@ docgraph leaks-rules > rules.txt          # non-destructive: reads only the conf
 git filter-repo --replace-text rules.txt  # destructive: rewrites history
 ```
 
-It emits one `regex:` line per deny rule (terms escaped and case-insensitive;
+It emits one `regex:` line per deny rule, including every `[[group]]`'s rules
+(terms escaped and case-insensitive;
 `regex` entries stay case-insensitive unless they carry `(?-i)`, normalized to a
 plain case-sensitive pattern), using filter-repo's `***REMOVED***` replacement. A
 stderr summary reports any `allow` / `allow_regex` / `[[dir]]` rules it
@@ -491,9 +520,10 @@ not the default/`.docgraphignore` layers — see [`leaks`](#leaks--the-content-s
 
 **No inline markers.** Every suppression lives in config or on the command line —
 `.docgraphignore`, `--ignore`, `--skip`, and the leaks config's `allow` /
-`allow_regex` / `[[dir]]`. docgraph never reads a suppression comment inside the
-audited files. `footgun-drift`, `covers-drift` and `doc-drift` have no in-file
-escape at all — they're opted out only whole-check, via `DOCGRAPH_FOOTGUN_OFF=1` /
+`allow_regex` / `[[dir]]` `ignore` + `ignore_groups`. docgraph never reads a
+suppression comment inside the audited files. `footgun-drift`, `covers-drift`
+and `doc-drift` have no in-file escape at all — they're opted out only
+whole-check, via `DOCGRAPH_FOOTGUN_OFF=1` /
 `--no-footgun-drift`, `DOCGRAPH_COVERS_OFF=1` / `--no-covers-drift`, and
 `DOC_DRIFT_OFF=1` respectively.
 

@@ -196,6 +196,17 @@ restating the vocabulary, so the schema and the checks can't drift apart.
     which has no machine-local file), so an absent file → no rules, no-op, warn; a
     malformed config → fatal exit 2 (`LeakConfig.compile`, `internal/audit/leaks.go`).
     Do NOT restore hard-fail-on-absent — it would brick every CI/fresh-clone push.
+  - **An `ignore` glob suppresses only the groups it names — do NOT restore
+    whole-file skipping.** Top-level `terms`/`regex` are the `default` group; a
+    `[[group]]` block is a named deny list, and `[[dir]].ignore_groups` (absent =
+    `["default"]`) decides what an ignore glob silences. The blanket
+    `ignore = ["**"]` a private repo needs for its own footprint vocabulary must
+    not blind the scan to terms that may not appear in ANY repo — that conflation
+    is the bug groups exist to fix, and it hid 68 real cross-boundary occurrences
+    across the owner's private repos. A repo that legitimately owns a class names
+    the class in `ignore_groups`, or its individual strings in `allow`; there is
+    still no per-file marker. `ReplaceTextRules` exports every group's rules, so a
+    history scrub covers them too.
   - **`leaks-rules` targets filter-repo's Python `re`, not Go/RE2.** A leading
     `(?-i)` is normalized to a plain case-sensitive rule (Python `re` rejects the
     bare flag-clear Go/RE2 accepts, which would abort the rewrite); other RE2-only
