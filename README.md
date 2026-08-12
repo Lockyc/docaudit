@@ -177,8 +177,9 @@ footprint vocabulary while staying scanned for terms that must not appear in
     ignore_groups = ["footprint"]     # footprint is fine here; client + secrets stay live
 
 `default` is reserved for the top-level rules — a `[[group]]` claiming it, a
-group with no name or a duplicate name, an `ignore_groups` naming an undefined
-group, or an `ignore_groups` with no `ignore` globs are all fatal config errors.
+group with no name, a duplicate name, or no terms/regex of its own, an
+`ignore_groups` naming an undefined group, or an `ignore_groups` with no
+`ignore` globs are all fatal config errors.
 `allow` / `allow_regex` are not group-scoped: naming the string suppresses it
 whatever group it belongs to, which is the per-repo escape hatch for a class the
 repo legitimately owns.
@@ -199,9 +200,12 @@ and the scan is a no-op there — it stays a **local** pre-push gate. Handling:
 
 - **No config file** → no rules, scans nothing, prints a warning. **Not** fatal
   (a hard-fail would brick every CI push).
-- **Malformed config** (bad TOML, bad regex, non-absolute `[[dir]]` path) →
-  exit 2, fail-closed. A broken config is a real bug, not the "not set up yet"
-  case.
+- **Malformed config** (bad TOML, an unknown key, bad regex, a non-absolute
+  `[[dir]]` path, a `[[group]]` with no terms or regex) → exit 2, fail-closed.
+  A broken config is a real bug, not the "not set up yet" case. `--skip leaks`
+  bypasses config loading entirely, so it's the escape hatch if a config trips
+  this path — fix the config rather than leaning on the skip, since it also
+  turns off the check.
 
 **Known gaps:** no git-history *detection* (use the manual leak-audit skill);
 *scrubbing* a known leak from history is `docgraph leaks-rules` below. No

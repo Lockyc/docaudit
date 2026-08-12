@@ -194,7 +194,9 @@ restating the vocabulary, so the schema and the checks can't drift apart.
     being the single visible source is the point. Do NOT reintroduce built-ins.
   - **Absent config is NOT fatal; malformed IS.** leaks runs by default (incl. CI,
     which has no machine-local file), so an absent file → no rules, no-op, warn; a
-    malformed config → fatal exit 2 (`LeakConfig.compile`, `internal/audit/leaks.go`).
+    malformed config → fatal exit 2, from either of two sites: `LeakConfig.compile`
+    (`internal/audit/leaks.go`) for bad regex/dir/group shapes, and `loadLeakConfig`
+    (`main.go`) for bad TOML and an unknown key.
     Do NOT restore hard-fail-on-absent — it would brick every CI/fresh-clone push.
   - **An `ignore` glob suppresses only the groups it names — do NOT restore
     whole-file skipping.** Top-level `terms`/`regex` are the `default` group; a
