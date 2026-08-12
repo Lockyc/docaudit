@@ -546,9 +546,9 @@ func TestRunEnforcesLeaksByDefault(t *testing.T) {
 		os.MkdirAll(filepath.Dir(full), 0o755)
 		os.WriteFile(full, []byte(c), 0o644)
 	}
-	write("README.md", "reach us at admin@lsjc.au today\n")
+	write("README.md", "reach us at admin@example.com today\n")
 	cfg := filepath.Join(dir, "leaks.toml")
-	os.WriteFile(cfg, []byte("terms = [\"lsjc.au\"]\n"), 0o644)
+	os.WriteFile(cfg, []byte("terms = [\"example.com\"]\n"), 0o644)
 	if out, err := exec.Command("git", "-C", dir, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}

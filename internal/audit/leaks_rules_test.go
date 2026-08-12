@@ -84,7 +84,7 @@ func TestValidateRejectsBadRegexAndNonAbsoluteDir(t *testing.T) {
 // history scrub silently skips the class groups exist to protect.
 func TestReplaceTextRulesIncludesGroups(t *testing.T) {
 	cfg := LeakConfig{
-		Terms: []string{"nucleus"},
+		Terms: []string{"corehost"},
 		Group: []GroupRule{{
 			Name:  "client",
 			Terms: []string{"acme"},
@@ -93,7 +93,7 @@ func TestReplaceTextRulesIncludesGroups(t *testing.T) {
 	}
 	lines, _ := ReplaceTextRules(cfg)
 	want := []string{
-		"regex:(?i)nucleus",
+		"regex:(?i)corehost",
 		"regex:(?i)acme",
 		"regex:ACME[0-9]{4}",
 	}

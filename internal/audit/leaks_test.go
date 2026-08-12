@@ -9,10 +9,10 @@ import (
 
 func TestCompileLeaksLiteralAndRegex(t *testing.T) {
 	cfg := LeakConfig{
-		Terms:      []string{"nucleus", "", "  "},
+		Terms:      []string{"corehost", "", "  "},
 		Regex:      []string{`192\.168\.1\.\d+`},
 		Allow:      []string{"github.com/lockyc"},
-		AllowRegex: []string{`au\.lsjc\.[a-z]+`},
+		AllowRegex: []string{`au\.example\.[a-z]+`},
 		Dir:        []DirRule{{Path: "/x", Ignore: []string{"v/*.json"}, Allow: []string{"mycelium"}}},
 	}
 	cl, err := cfg.compile()
@@ -40,21 +40,21 @@ func TestCompileLeaksBadRegex(t *testing.T) {
 // J1: a regexp deny is case-insensitive by default — a footprint term written in
 // a different casing must NOT slip the gate (false negatives are the cardinal sin).
 func TestLeakScanRegexDenyIsCaseInsensitive(t *testing.T) {
-	dir := setupRepo(t, map[string]string{"a.md": "host Nucleus-Prod here\n"}, []string{"a.md"})
-	found, err := LeakScan(dir, LeakConfig{Regex: []string{"nucleus"}}, nil)
+	dir := setupRepo(t, map[string]string{"a.md": "host Corehost-Prod here\n"}, []string{"a.md"})
+	found, err := LeakScan(dir, LeakConfig{Regex: []string{"corehost"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(found) != 1 {
-		t.Fatalf("regex deny must be case-insensitive (catch 'Nucleus'), got %+v", found)
+		t.Fatalf("regex deny must be case-insensitive (catch 'Corehost'), got %+v", found)
 	}
 }
 
 // J1: allow_regex is case-insensitive too, so it suppresses a deny match whose
 // casing differs from the allow pattern.
 func TestLeakScanAllowRegexIsCaseInsensitive(t *testing.T) {
-	dir := setupRepo(t, map[string]string{"a.md": "id au.LSJC.curator ok\n"}, []string{"a.md"})
-	found, err := LeakScan(dir, LeakConfig{Terms: []string{"lsjc"}, AllowRegex: []string{`au\.lsjc\.[a-z]+`}}, nil)
+	dir := setupRepo(t, map[string]string{"a.md": "id au.EXAMPLE.curator ok\n"}, []string{"a.md"})
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"example"}, AllowRegex: []string{`au\.example\.[a-z]+`}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,31 +89,31 @@ func TestCompileDirPathTildeExpanded(t *testing.T) {
 
 func TestLeakScanLiteralAndRegex(t *testing.T) {
 	dir := setupRepo(t, map[string]string{
-		"README.md": "clean\ncontact Lachlan here\nhost nucleus up\n", // case-insensitive literal + literal
-		"net.conf":  "ip 192.168.1.42 assigned\n",                     // regex
+		"README.md": "clean\ncontact Lachlan here\nhost corehost up\n", // case-insensitive literal + literal
+		"net.conf":  "ip 192.168.1.42 assigned\n",                      // regex
 	}, []string{"README.md", "net.conf"})
 
-	cfg := LeakConfig{Terms: []string{"lachlan", "nucleus"}, Regex: []string{`192\.168\.1\.\d+`}}
+	cfg := LeakConfig{Terms: []string{"lachlan", "corehost"}, Regex: []string{`192\.168\.1\.\d+`}}
 	found, err := LeakScan(dir, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(found) != 3 {
-		t.Fatalf("findings = %+v, want 3 (Lachlan, nucleus, IP)", found)
+		t.Fatalf("findings = %+v, want 3 (Lachlan, corehost, IP)", found)
 	}
 }
 
 func TestLeakScanGlobalAllowSuppresses(t *testing.T) {
 	dir := setupRepo(t, map[string]string{
-		"a.md": "bundle au.lsjc.curator is fine\nbut lsjc.au alone leaks\n",
+		"a.md": "bundle au.example.curator is fine\nbut example.com alone leaks\n",
 	}, []string{"a.md"})
 
-	cfg := LeakConfig{Terms: []string{"lsjc"}, Allow: []string{"au.lsjc.curator"}}
+	cfg := LeakConfig{Terms: []string{"example"}, Allow: []string{"au.example.curator"}}
 	found, err := LeakScan(dir, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// line 1 'lsjc' covered by the allow span; line 2 'lsjc' flagged.
+	// line 1 'example' covered by the allow span; line 2 'example' flagged.
 	if len(found) != 1 || found[0].Line != 2 {
 		t.Fatalf("findings = %+v, want exactly a.md:2", found)
 	}
@@ -175,11 +175,11 @@ func TestLeakScanDirAllowIsScoped(t *testing.T) {
 
 func TestLeakScanTrackedToolingStillScanned(t *testing.T) {
 	dir := setupRepo(t, map[string]string{
-		".claude/skills/foo.md": "internal note: nucleus\n",
+		".claude/skills/foo.md": "internal note: corehost\n",
 		".docgraphignore":       ".claude/**\n",
 	}, []string{".claude/skills/foo.md", ".docgraphignore"})
 
-	found, err := LeakScan(dir, LeakConfig{Terms: []string{"nucleus"}}, nil)
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"corehost"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,12 +196,12 @@ func TestLeakScanTrackedToolingStillScanned(t *testing.T) {
 
 func TestLeakScanBinarySkippedAndExtraIgnore(t *testing.T) {
 	dir := setupRepo(t, map[string]string{
-		"logo.bin":  "\x00\x01nucleus\x00", // binary, skipped
-		"vendor.md": "nucleus here\n",      // dropped by --ignore
-		"real.md":   "nucleus here\n",      // flagged
+		"logo.bin":  "\x00\x01corehost\x00", // binary, skipped
+		"vendor.md": "corehost here\n",      // dropped by --ignore
+		"real.md":   "corehost here\n",      // flagged
 	}, []string{"logo.bin", "vendor.md", "real.md"})
 
-	found, err := LeakScan(dir, LeakConfig{Terms: []string{"nucleus"}}, []string{"vendor.md"})
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"corehost"}}, []string{"vendor.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestLeakScanBadRegexIsError(t *testing.T) {
 // dir ignore glob can suppress the default group without touching it.
 func TestCompileLeaksNamedGroups(t *testing.T) {
 	cfg := LeakConfig{
-		Terms: []string{"nucleus"},
+		Terms: []string{"corehost"},
 		Group: []GroupRule{{
 			Name:  "client",
 			Terms: []string{"acme"},
@@ -334,9 +334,9 @@ func TestCompileLeaksGroupBadRegex(t *testing.T) {
 // The whole point of groups: a blanket ignore silences the footprint vocabulary
 // a private repo legitimately carries, and leaves a cross-boundary term live.
 func TestLeakScanIgnoreSuppressesOnlyDefaultGroup(t *testing.T) {
-	dir := setupRepo(t, map[string]string{"a.md": "host nucleus and client acme\n"}, []string{"a.md"})
+	dir := setupRepo(t, map[string]string{"a.md": "host corehost and client acme\n"}, []string{"a.md"})
 	cfg := LeakConfig{
-		Terms: []string{"nucleus"},
+		Terms: []string{"corehost"},
 		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
 		Dir:   []DirRule{{Path: dir, Ignore: []string{"**"}}},
 	}
@@ -352,9 +352,9 @@ func TestLeakScanIgnoreSuppressesOnlyDefaultGroup(t *testing.T) {
 // Naming the group in ignore_groups is how you opt a subtree out of it — the
 // one-line replacement for restating the class in allow.
 func TestLeakScanIgnoreGroupsSuppressesNamedGroup(t *testing.T) {
-	dir := setupRepo(t, map[string]string{"a.md": "host nucleus and client acme\n"}, []string{"a.md"})
+	dir := setupRepo(t, map[string]string{"a.md": "host corehost and client acme\n"}, []string{"a.md"})
 	cfg := LeakConfig{
-		Terms: []string{"nucleus"},
+		Terms: []string{"corehost"},
 		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
 		Dir: []DirRule{{
 			Path:         dir,
@@ -366,16 +366,16 @@ func TestLeakScanIgnoreGroupsSuppressesNamedGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(found) != 1 || found[0].Pattern != "nucleus" {
+	if len(found) != 1 || found[0].Pattern != "corehost" {
 		t.Fatalf("want only the default-group match to survive, got %+v", found)
 	}
 }
 
 // Naming every group is still available and still means "skip this file".
 func TestLeakScanIgnoreGroupsAllSuppressed(t *testing.T) {
-	dir := setupRepo(t, map[string]string{"a.md": "host nucleus and client acme\n"}, []string{"a.md"})
+	dir := setupRepo(t, map[string]string{"a.md": "host corehost and client acme\n"}, []string{"a.md"})
 	cfg := LeakConfig{
-		Terms: []string{"nucleus"},
+		Terms: []string{"corehost"},
 		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
 		Dir: []DirRule{{
 			Path:         dir,
@@ -412,9 +412,9 @@ func TestLeakScanDirAllowSuppressesGroupedTerm(t *testing.T) {
 // A narrower dir's ignore composes with a wider dir's allow instead of cutting
 // the loop short, so exceptions from every matching dir apply.
 func TestLeakScanIgnoreDoesNotDropOtherDirsAllows(t *testing.T) {
-	dir := setupRepo(t, map[string]string{"sub/a.md": "client acme and host nucleus\n"}, []string{"sub/a.md"})
+	dir := setupRepo(t, map[string]string{"sub/a.md": "client acme and host corehost\n"}, []string{"sub/a.md"})
 	cfg := LeakConfig{
-		Terms: []string{"nucleus"},
+		Terms: []string{"corehost"},
 		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
 		Dir: []DirRule{
 			{Path: dir, Allow: []string{"acme"}},

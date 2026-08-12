@@ -20,7 +20,7 @@ func TestDocDecode(t *testing.T) {
 	src := `type: runbook
 title: Restore Vaultwarden
 description: recovery
-tags: [vault, nucleus]
+tags: [vault, corehost]
 verified: 2026-06-30
 review: 90d
 service: vaultwarden
@@ -29,7 +29,7 @@ links:
     to: scripts/vault-restore.sh
   - rel: depends-on
     to: docs/services/proxmox.md
-    note: needs nucleus reachable first
+    note: needs corehost reachable first
 `
 	var d Doc
 	if err := yaml.Unmarshal([]byte(src), &d); err != nil {
@@ -38,7 +38,7 @@ links:
 	if d.Type != "runbook" || d.Title != "Restore Vaultwarden" {
 		t.Errorf("type/title = %q / %q", d.Type, d.Title)
 	}
-	if !reflect.DeepEqual(d.Tags, []string{"vault", "nucleus"}) {
+	if !reflect.DeepEqual(d.Tags, []string{"vault", "corehost"}) {
 		t.Errorf("tags = %v", d.Tags)
 	}
 	if d.Verified != "2026-06-30" || d.Review != "90d" {
@@ -50,7 +50,7 @@ links:
 	if d.Links[0].Rel != "covers" || d.Links[0].To != "scripts/vault-restore.sh" {
 		t.Errorf("links[0] = %+v", d.Links[0])
 	}
-	if d.Links[1].Note != "needs nucleus reachable first" {
+	if d.Links[1].Note != "needs corehost reachable first" {
 		t.Errorf("links[1].Note = %q", d.Links[1].Note)
 	}
 	if d.Extra["service"] != "vaultwarden" {
