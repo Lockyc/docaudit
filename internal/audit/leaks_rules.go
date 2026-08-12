@@ -24,6 +24,10 @@ type Dropped struct {
 // deterministic (terms then regex, in config order) and de-duped; whitespace-only
 // entries are skipped, matching the scan.
 //
+// Every [[group]]'s terms and regex are exported after the top-level ones, in
+// config order — a group scopes which [[dir]] ignore can silence a rule, not
+// whether it denies.
+//
 // allow / allow_regex / [[dir]] rules have no filter-repo equivalent, so they are
 // dropped and counted in Dropped. docgraph reads only this config — never history.
 func ReplaceTextRules(cfg LeakConfig) (lines []string, dropped Dropped) {
@@ -35,26 +39,38 @@ func ReplaceTextRules(cfg LeakConfig) (lines []string, dropped Dropped) {
 		seen[line] = true
 		lines = append(lines, line)
 	}
-	for _, t := range cfg.Terms {
-		if strings.TrimSpace(t) == "" {
-			continue
+	addTerms := func(ts []string) {
+		for _, t := range ts {
+			if strings.TrimSpace(t) == "" {
+				continue
+			}
+			add("regex:(?i)" + regexp.QuoteMeta(t))
 		}
-		add("regex:(?i)" + regexp.QuoteMeta(t))
 	}
-	for _, r := range cfg.Regex {
-		if strings.TrimSpace(r) == "" {
-			continue
+	addRegex := func(rs []string) {
+		for _, r := range rs {
+			if strings.TrimSpace(r) == "" {
+				continue
+			}
+			if strings.HasPrefix(r, "(?-i)") {
+				// A leading (?-i) is docgraph's documented case-sensitive opt-out. But
+				// git-filter-repo compiles with Python re, which REJECTS a bare (?-i)
+				// flag-clear that Go/RE2 accepts — emitting the pattern verbatim aborts
+				// the whole rewrite. Strip the flag and emit a plain case-sensitive rule,
+				// which is Python-valid and matches the scan's semantics.
+				add("regex:" + strings.TrimPrefix(r, "(?-i)"))
+			} else {
+				add("regex:(?i)" + r)
+			}
 		}
-		if strings.HasPrefix(r, "(?-i)") {
-			// A leading (?-i) is docgraph's documented case-sensitive opt-out. But
-			// git-filter-repo compiles with Python re, which REJECTS a bare (?-i)
-			// flag-clear that Go/RE2 accepts — emitting the pattern verbatim aborts the
-			// whole rewrite. Strip the flag and emit a plain case-sensitive rule, which
-			// is Python-valid and matches the scan's semantics for a leading opt-out.
-			add("regex:" + strings.TrimPrefix(r, "(?-i)"))
-		} else {
-			add("regex:(?i)" + r)
-		}
+	}
+	addTerms(cfg.Terms)
+	addRegex(cfg.Regex)
+	// Group membership scopes what a [[dir]] ignore can silence; it does not make a
+	// rule any less of a deny rule, so every group's vocabulary is exported too.
+	for _, g := range cfg.Group {
+		addTerms(g.Terms)
+		addRegex(g.Regex)
 	}
 	dropped.Allows = countNonEmpty(cfg.Allow) + countNonEmpty(cfg.AllowRegex)
 	dropped.Dirs = len(cfg.Dir)

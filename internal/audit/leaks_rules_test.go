@@ -79,3 +79,30 @@ func TestValidateRejectsBadRegexAndNonAbsoluteDir(t *testing.T) {
 		t.Errorf("valid config should pass Validate, got %v", err)
 	}
 }
+
+// A grouped deny rule is still a deny rule: leaks-rules must export it, or a
+// history scrub silently skips the class groups exist to protect.
+func TestReplaceTextRulesIncludesGroups(t *testing.T) {
+	cfg := LeakConfig{
+		Terms: []string{"nucleus"},
+		Group: []GroupRule{{
+			Name:  "client",
+			Terms: []string{"acme"},
+			Regex: []string{`(?-i)ACME[0-9]{4}`},
+		}},
+	}
+	lines, _ := ReplaceTextRules(cfg)
+	want := []string{
+		"regex:(?i)nucleus",
+		"regex:(?i)acme",
+		"regex:ACME[0-9]{4}",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %v, want %v", lines, want)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Errorf("line %d = %q, want %q", i, lines[i], w)
+		}
+	}
+}
