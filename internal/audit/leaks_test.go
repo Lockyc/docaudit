@@ -319,3 +319,102 @@ func TestCompileLeaksGroupBadRegex(t *testing.T) {
 		t.Errorf("want a group-regex compile error, got %v", err)
 	}
 }
+
+// The whole point of groups: a blanket ignore silences the footprint vocabulary
+// a private repo legitimately carries, and leaves a cross-boundary term live.
+func TestLeakScanIgnoreSuppressesOnlyDefaultGroup(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"a.md": "host nucleus and client acme\n"}, []string{"a.md"})
+	cfg := LeakConfig{
+		Terms: []string{"nucleus"},
+		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
+		Dir:   []DirRule{{Path: dir, Ignore: []string{"**"}}},
+	}
+	found, err := LeakScan(dir, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Pattern != "acme" {
+		t.Fatalf("want only the client-group match to survive the ignore, got %+v", found)
+	}
+}
+
+// Naming the group in ignore_groups is how you opt a subtree out of it — the
+// one-line replacement for restating the class in allow.
+func TestLeakScanIgnoreGroupsSuppressesNamedGroup(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"a.md": "host nucleus and client acme\n"}, []string{"a.md"})
+	cfg := LeakConfig{
+		Terms: []string{"nucleus"},
+		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
+		Dir: []DirRule{{
+			Path:         dir,
+			Ignore:       []string{"**"},
+			IgnoreGroups: []string{"client"},
+		}},
+	}
+	found, err := LeakScan(dir, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Pattern != "nucleus" {
+		t.Fatalf("want only the default-group match to survive, got %+v", found)
+	}
+}
+
+// Naming every group is still available and still means "skip this file".
+func TestLeakScanIgnoreGroupsAllSuppressed(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"a.md": "host nucleus and client acme\n"}, []string{"a.md"})
+	cfg := LeakConfig{
+		Terms: []string{"nucleus"},
+		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
+		Dir: []DirRule{{
+			Path:         dir,
+			Ignore:       []string{"**"},
+			IgnoreGroups: []string{"default", "client"},
+		}},
+	}
+	found, err := LeakScan(dir, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("want every group suppressed, got %+v", found)
+	}
+}
+
+// An explicit allow still suppresses a grouped term by naming it — the escape
+// hatch for the repo that legitimately owns the vocabulary.
+func TestLeakScanDirAllowSuppressesGroupedTerm(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"a.md": "client acme here\n"}, []string{"a.md"})
+	cfg := LeakConfig{
+		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
+		Dir:   []DirRule{{Path: dir, Allow: []string{"acme"}}},
+	}
+	found, err := LeakScan(dir, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("an explicit dir allow must suppress a grouped term, got %+v", found)
+	}
+}
+
+// A narrower dir's ignore composes with a wider dir's allow instead of cutting
+// the loop short, so exceptions from every matching dir apply.
+func TestLeakScanIgnoreDoesNotDropOtherDirsAllows(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"sub/a.md": "client acme and host nucleus\n"}, []string{"sub/a.md"})
+	cfg := LeakConfig{
+		Terms: []string{"nucleus"},
+		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
+		Dir: []DirRule{
+			{Path: dir, Allow: []string{"acme"}},
+			{Path: filepath.Join(dir, "sub"), Ignore: []string{"**"}},
+		},
+	}
+	found, err := LeakScan(dir, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("parent allow + child default-ignore should leave nothing, got %+v", found)
+	}
+}

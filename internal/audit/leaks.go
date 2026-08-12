@@ -231,9 +231,12 @@ func relUnder(abs, dir string) (string, bool) {
 
 // LeakScan walks every git-tracked, non-binary file and reports deny matches not
 // covered by an allow span. Scope is git tracking (a tracked file ships publicly),
-// not the doc-graph ignore layers. extraIgnores (--ignore CLI globs) and each
-// applicable [[dir]].ignore drop a file entirely; global + dir-scoped allows
-// suppress matches. History is never read. A bad regexp in the config is an error.
+// not the doc-graph ignore layers. extraIgnores (--ignore CLI globs) drop a file
+// entirely; an applicable [[dir]].ignore drops only the groups that dir names
+// (DefaultGroup unless ignore_groups says otherwise), so a blanket ignore silences
+// a repo's own footprint vocabulary without blinding the scan to terms that must
+// not appear anywhere. Global + dir-scoped allows suppress individual matches.
+// History is never read. A bad regexp in the config is an error.
 func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFinding, error) {
 	cl, err := cfg.compile()
 	if err != nil {
@@ -250,20 +253,32 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 		}
 		abs := filepath.Clean(filepath.Join(repoRoot, filepath.FromSlash(f)))
 		var dirAllows []matcher
-		skip := false
+		suppressed := map[string]bool{}
 		for _, d := range cl.dirs {
 			rel, under := relUnder(abs, d.path)
 			if !under {
 				continue
 			}
 			if matchesIgnore(rel, d.ignore) {
-				skip = true
-				break
+				for _, g := range d.ignoreGroups {
+					suppressed[g] = true
+				}
 			}
 			dirAllows = append(dirAllows, d.allow...)
 		}
-		if skip {
-			continue
+		deny := cl.deny
+		if len(suppressed) > 0 {
+			deny = nil
+			for _, m := range cl.deny {
+				if !suppressed[m.group] {
+					deny = append(deny, m)
+				}
+			}
+			// Every group suppressed — skip before the read, preserving the fast
+			// path a blanket `ignore = ["**"]` has always had.
+			if len(deny) == 0 {
+				continue
+			}
 		}
 		allow := cl.allow
 		if len(dirAllows) > 0 {
@@ -274,7 +289,7 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 			continue
 		}
 		for i, line := range strings.Split(string(b), "\n") {
-			findings = append(findings, scanLine(f, i+1, line, cl.deny, allow)...)
+			findings = append(findings, scanLine(f, i+1, line, deny, allow)...)
 		}
 	}
 	sort.Slice(findings, func(i, j int) bool {
