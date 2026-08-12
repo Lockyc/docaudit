@@ -9,24 +9,42 @@ import (
 	"strings"
 )
 
+// DefaultGroup is the implicit group of the top-level terms/regex. A [[dir]]
+// ignore glob suppresses this group and no other unless ignore_groups says so,
+// which is what lets a private repo silence its own footprint vocabulary while
+// staying scanned for terms that must not appear in ANY repo.
+const DefaultGroup = "default"
+
 // LeakConfig is the decoded global leaks.toml. Deny terms and their exceptions
 // live ONLY here (never in a repo): a committed deny/allow list would re-leak the
-// terms it names. Top-level fields apply to every scanned repo; [[dir]] sections
-// scope exceptions to files under an absolute path.
+// terms it names. Top-level fields apply to every scanned repo; [[group]] sections
+// are named deny lists that a dir ignore cannot silence unless it names them;
+// [[dir]] sections scope exceptions to files under an absolute path.
 type LeakConfig struct {
-	Terms      []string  `toml:"terms"`       // literal, case-insensitive deny
-	Regex      []string  `toml:"regex"`       // regexp deny (case-insensitive like terms; opt out per-pattern with (?-i))
-	Allow      []string  `toml:"allow"`       // literal global allow
-	AllowRegex []string  `toml:"allow_regex"` // regexp global allow (also case-insensitive)
-	Dir        []DirRule `toml:"dir"`         // per-directory exceptions
+	Terms      []string    `toml:"terms"`       // literal, case-insensitive deny (DefaultGroup)
+	Regex      []string    `toml:"regex"`       // regexp deny (case-insensitive like terms; opt out per-pattern with (?-i))
+	Allow      []string    `toml:"allow"`       // literal global allow
+	AllowRegex []string    `toml:"allow_regex"` // regexp global allow (also case-insensitive)
+	Group      []GroupRule `toml:"group"`       // named deny lists, suppressible only by name
+	Dir        []DirRule   `toml:"dir"`         // per-directory exceptions
+}
+
+// GroupRule is a named deny list. Its rules deny exactly like the top-level ones;
+// the name exists so a [[dir]] can suppress the class in one line instead of
+// restating its terms — a restatement that silently drifts as the class grows.
+type GroupRule struct {
+	Name  string   `toml:"name"`  // required, non-empty, unique, never DefaultGroup
+	Terms []string `toml:"terms"` // literal, case-insensitive deny
+	Regex []string `toml:"regex"` // regexp deny
 }
 
 // DirRule scopes exceptions to files whose absolute path is under Path.
 type DirRule struct {
-	Path       string   `toml:"path"`        // absolute directory key (a leading ~/ is expanded)
-	Ignore     []string `toml:"ignore"`      // path globs (relative to Path) to skip
-	Allow      []string `toml:"allow"`       // literal allow, scoped to this subtree
-	AllowRegex []string `toml:"allow_regex"` // regexp allow, scoped to this subtree
+	Path         string   `toml:"path"`          // absolute directory key (a leading ~/ is expanded)
+	Ignore       []string `toml:"ignore"`        // path globs (relative to Path) to skip
+	IgnoreGroups []string `toml:"ignore_groups"` // which groups Ignore silences; absent means [DefaultGroup]
+	Allow        []string `toml:"allow"`         // literal allow, scoped to this subtree
+	AllowRegex   []string `toml:"allow_regex"`   // regexp allow, scoped to this subtree
 }
 
 // LeakFinding is one deny match not covered by an allow span.
@@ -39,10 +57,12 @@ type LeakFinding struct {
 
 // matcher is a compiled deny/allow term. Both literal and regex terms compile
 // case-insensitively (a leak must be caught in any casing); raw is the source
-// string, shown in findings.
+// string, shown in findings; group is the deny class the rule belongs to (empty
+// for allow matchers, which are never group-scoped).
 type matcher struct {
-	re  *regexp.Regexp
-	raw string
+	re    *regexp.Regexp
+	raw   string
+	group string
 }
 
 func literalMatcher(s string) (matcher, bool) {
@@ -69,9 +89,10 @@ func regexMatcher(s string) (matcher, bool, error) {
 }
 
 type compiledDir struct {
-	path   string // cleaned absolute
-	ignore []string
-	allow  []matcher
+	path         string // cleaned absolute
+	ignore       []string
+	ignoreGroups []string // resolved: never empty, defaults to [DefaultGroup]
+	allow        []matcher
 }
 
 type compiledLeaks struct {
@@ -101,34 +122,56 @@ func expandDirPath(p string) (string, error) {
 }
 
 // compile turns a LeakConfig into matchers. Literal entries never error; a bad
-// regexp in any regex field, or a non-absolute [[dir]] path, is a fatal config error.
+// regexp in any regex field, a malformed [[group]], a non-absolute [[dir]] path,
+// or an unusable ignore_groups is a fatal config error — a silently-dead rule in
+// a gate is exactly what trains people to reach for --no-verify.
 func (c LeakConfig) compile() (compiledLeaks, error) {
 	var cl compiledLeaks
-	addLit := func(dst *[]matcher, ss []string) {
+	addLit := func(dst *[]matcher, ss []string, group string) {
 		for _, s := range ss {
 			if m, ok := literalMatcher(s); ok {
+				m.group = group
 				*dst = append(*dst, m)
 			}
 		}
 	}
-	addRe := func(dst *[]matcher, ss []string, what string) error {
+	addRe := func(dst *[]matcher, ss []string, group, what string) error {
 		for _, s := range ss {
 			m, ok, err := regexMatcher(s)
 			if err != nil {
 				return fmt.Errorf("%s %q: %v", what, s, err)
 			}
 			if ok {
+				m.group = group
 				*dst = append(*dst, m)
 			}
 		}
 		return nil
 	}
-	addLit(&cl.deny, c.Terms)
-	if err := addRe(&cl.deny, c.Regex, "leaks regex"); err != nil {
+	addLit(&cl.deny, c.Terms, DefaultGroup)
+	if err := addRe(&cl.deny, c.Regex, DefaultGroup, "leaks regex"); err != nil {
 		return compiledLeaks{}, err
 	}
-	addLit(&cl.allow, c.Allow)
-	if err := addRe(&cl.allow, c.AllowRegex, "leaks allow_regex"); err != nil {
+	defined := map[string]bool{DefaultGroup: true}
+	for _, g := range c.Group {
+		name := strings.TrimSpace(g.Name)
+		if name == "" {
+			return compiledLeaks{}, fmt.Errorf("leaks [[group]]: name is required")
+		}
+		if name == DefaultGroup {
+			return compiledLeaks{}, fmt.Errorf("leaks [[group]] %q: name is reserved for the top-level terms/regex", name)
+		}
+		if defined[name] {
+			return compiledLeaks{}, fmt.Errorf("leaks [[group]] %q: duplicate group name", name)
+		}
+		defined[name] = true
+		addLit(&cl.deny, g.Terms, name)
+		if err := addRe(&cl.deny, g.Regex, name, fmt.Sprintf("leaks [[group]] %q regex", name)); err != nil {
+			return compiledLeaks{}, err
+		}
+	}
+	addLit(&cl.allow, c.Allow, "")
+	if err := addRe(&cl.allow, c.AllowRegex, "", "leaks allow_regex"); err != nil {
 		return compiledLeaks{}, err
 	}
 	for _, d := range c.Dir {
@@ -136,9 +179,20 @@ func (c LeakConfig) compile() (compiledLeaks, error) {
 		if err != nil {
 			return compiledLeaks{}, fmt.Errorf("leaks [[dir]] path %q: %v", d.Path, err)
 		}
-		cd := compiledDir{path: path, ignore: d.Ignore}
-		addLit(&cd.allow, d.Allow)
-		if err := addRe(&cd.allow, d.AllowRegex, fmt.Sprintf("leaks [[dir]] %q allow_regex", d.Path)); err != nil {
+		groups := d.IgnoreGroups
+		if len(groups) == 0 {
+			groups = []string{DefaultGroup}
+		} else if len(d.Ignore) == 0 {
+			return compiledLeaks{}, fmt.Errorf("leaks [[dir]] %q: ignore_groups set with no ignore globs — it would never apply", d.Path)
+		}
+		for _, g := range groups {
+			if !defined[g] {
+				return compiledLeaks{}, fmt.Errorf("leaks [[dir]] %q: ignore_groups names undefined group %q", d.Path, g)
+			}
+		}
+		cd := compiledDir{path: path, ignore: d.Ignore, ignoreGroups: groups}
+		addLit(&cd.allow, d.Allow, "")
+		if err := addRe(&cd.allow, d.AllowRegex, "", fmt.Sprintf("leaks [[dir]] %q allow_regex", d.Path)); err != nil {
 			return compiledLeaks{}, err
 		}
 		cl.dirs = append(cl.dirs, cd)

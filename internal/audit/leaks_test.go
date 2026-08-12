@@ -217,3 +217,105 @@ func TestLeakScanBadRegexIsError(t *testing.T) {
 		t.Error("bad regex in config should make LeakScan error")
 	}
 }
+
+// A [[group]] block is a named deny list; its matchers carry the group name so a
+// dir ignore glob can suppress the default group without touching it.
+func TestCompileLeaksNamedGroups(t *testing.T) {
+	cfg := LeakConfig{
+		Terms: []string{"nucleus"},
+		Group: []GroupRule{{
+			Name:  "client",
+			Terms: []string{"acme"},
+			Regex: []string{`acme[\s_-]*corp`},
+		}},
+	}
+	cl, err := cfg.compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cl.deny) != 3 {
+		t.Fatalf("deny = %d, want 3 (1 default term + 1 group term + 1 group regex)", len(cl.deny))
+	}
+	got := map[string]int{}
+	for _, m := range cl.deny {
+		got[m.group]++
+	}
+	if got[DefaultGroup] != 1 || got["client"] != 2 {
+		t.Errorf("group tags = %v, want 1 default + 2 client", got)
+	}
+}
+
+// `default` names the top-level terms/regex, so a [[group]] claiming it is a
+// fatal config error rather than a silent shadow.
+func TestCompileLeaksGroupNameDefaultReserved(t *testing.T) {
+	_, err := LeakConfig{Group: []GroupRule{{Name: "default", Terms: []string{"x"}}}}.compile()
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("want a reserved-name error, got %v", err)
+	}
+}
+
+func TestCompileLeaksGroupNameRequired(t *testing.T) {
+	_, err := LeakConfig{Group: []GroupRule{{Terms: []string{"x"}}}}.compile()
+	if err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Errorf("want a missing-name error, got %v", err)
+	}
+}
+
+func TestCompileLeaksGroupNameDuplicate(t *testing.T) {
+	cfg := LeakConfig{Group: []GroupRule{
+		{Name: "client", Terms: []string{"a"}},
+		{Name: "client", Terms: []string{"b"}},
+	}}
+	_, err := cfg.compile()
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("want a duplicate-group error, got %v", err)
+	}
+}
+
+// A dir naming a group that does not exist would silently suppress nothing —
+// the same silently-dead-exclusion failure expandDirPath already guards against.
+func TestCompileLeaksIgnoreGroupsUndefined(t *testing.T) {
+	cfg := LeakConfig{Dir: []DirRule{{
+		Path:         "/x",
+		Ignore:       []string{"**"},
+		IgnoreGroups: []string{"nope"},
+	}}}
+	_, err := cfg.compile()
+	if err == nil || !strings.Contains(err.Error(), "undefined group") {
+		t.Errorf("want an undefined-group error, got %v", err)
+	}
+}
+
+// ignore_groups only ever narrows what an ignore glob suppresses, so setting it
+// with no globs is a no-op that looks meaningful.
+func TestCompileLeaksIgnoreGroupsWithoutIgnore(t *testing.T) {
+	cfg := LeakConfig{
+		Group: []GroupRule{{Name: "client", Terms: []string{"acme"}}},
+		Dir:   []DirRule{{Path: "/x", IgnoreGroups: []string{"client"}}},
+	}
+	_, err := cfg.compile()
+	if err == nil || !strings.Contains(err.Error(), "no ignore globs") {
+		t.Errorf("want a no-globs error, got %v", err)
+	}
+}
+
+// Absent ignore_groups means the default group, preserving today's meaning of a
+// bare ignore glob.
+func TestCompileLeaksIgnoreGroupsDefaults(t *testing.T) {
+	cfg := LeakConfig{Dir: []DirRule{{Path: "/x", Ignore: []string{"**"}}}}
+	cl, err := cfg.compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cl.dirs) != 1 || len(cl.dirs[0].ignoreGroups) != 1 || cl.dirs[0].ignoreGroups[0] != DefaultGroup {
+		t.Errorf("ignoreGroups = %v, want [%q]", cl.dirs[0].ignoreGroups, DefaultGroup)
+	}
+}
+
+func TestCompileLeaksGroupBadRegex(t *testing.T) {
+	cfg := LeakConfig{Group: []GroupRule{{Name: "client", Regex: []string{"(unclosed"}}}}
+	_, err := cfg.compile()
+	if err == nil || !strings.Contains(err.Error(), `[[group]] "client" regex`) {
+		t.Errorf("want a group-regex compile error, got %v", err)
+	}
+}
