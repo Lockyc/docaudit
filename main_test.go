@@ -446,6 +446,39 @@ func TestRunLeaksMalformedTomlExit2(t *testing.T) {
 	}
 }
 
+// An unknown TOML key (e.g. the singular "ignore_group" typo for
+// "ignore_groups") decodes with no error and a zero-value field, so a
+// [[dir]] silently gets the DefaultGroup default instead of the named group
+// the owner meant to suppress — inverting which deny class is live. The
+// decode must reject it instead of accepting it quietly.
+func TestRunLeaksUnknownKeyExit2(t *testing.T) {
+	dir := gitInit(t)
+	cfg := filepath.Join(dir, "leaks.toml")
+	toml := `terms = ["needle"]
+
+[[group]]
+name = "footprint"
+terms = ["local-thing"]
+
+[[dir]]
+path = "` + dir + `"
+ignore = ["**"]
+ignore_group = ["footprint"]
+`
+	os.WriteFile(cfg, []byte(toml), 0o644)
+	var out, errb bytes.Buffer
+	code := run([]string{"--leaks-config", cfg, dir}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 (unknown key ignore_group)\n%s", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "nothing is scanned") {
+		t.Errorf("an unknown-key config must fail, not degrade to the absent-config path: %s", errb.String())
+	}
+	if !strings.Contains(errb.String(), "ignore_group") {
+		t.Errorf("want the offending key named in the error, got: %s", errb.String())
+	}
+}
+
 // leaks is enforced by DEFAULT — no opt-in flag needed for a user-configured
 // pattern to gate.
 func TestLeaksRulesAbsentConfigIsNonFatal(t *testing.T) {

@@ -155,11 +155,13 @@ expanded; a non-absolute `path` is a fatal config error).
 
 Deny rules fall into **groups**. Top-level `terms` / `regex` are the implicit
 `default` group; a `[[group]]` block is a named deny list. A `[[dir]].ignore`
-glob silences **only the `default` group** unless `ignore_groups` names others —
-so a private repo can blanket-ignore its own footprint vocabulary while staying
-scanned for terms that must not appear in *any* repo:
+glob silences the `default` group by default, but `ignore_groups` *replaces*
+that default rather than adding to it — name `"default"` alongside another
+group to keep both silenced — so a private repo can blanket-ignore its own
+footprint vocabulary while staying scanned for terms that must not appear in
+*any* repo:
 
-    terms = ['(?-i)AKIA[0-9A-Z]{16}']   # default group: secret shapes
+    regex = ['(?-i)AKIA[0-9A-Z]{16}']   # default group: secret shapes
 
     [[group]]
     name  = "footprint"
@@ -520,7 +522,7 @@ not the default/`.docgraphignore` layers — see [`leaks`](#leaks--the-content-s
 
 **No inline markers.** Every suppression lives in config or on the command line —
 `.docgraphignore`, `--ignore`, `--skip`, and the leaks config's `allow` /
-`allow_regex` / `[[dir]]` `ignore` + `ignore_groups`. docgraph never reads a
+`allow_regex`, and a `[[dir]]`'s `ignore` + `ignore_groups`. docgraph never reads a
 suppression comment inside the audited files. `footgun-drift`, `covers-drift`
 and `doc-drift` have no in-file escape at all — they're opted out only
 whole-check, via `DOCGRAPH_FOOTGUN_OFF=1` /

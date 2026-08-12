@@ -272,6 +272,17 @@ func TestCompileLeaksGroupNameDuplicate(t *testing.T) {
 	}
 }
 
+// An empty [[group]] would still register in `defined`, so an ignore_groups
+// naming it passes validation while filtering zero matchers — a blanket
+// ignore that looks configured but silences nothing.
+func TestCompileLeaksGroupEmpty(t *testing.T) {
+	cfg := LeakConfig{Group: []GroupRule{{Name: "client"}}}
+	_, err := cfg.compile()
+	if err == nil || !strings.Contains(err.Error(), "no terms or regex") {
+		t.Errorf("want a no-terms-or-regex error, got %v", err)
+	}
+}
+
 // A dir naming a group that does not exist would silently suppress nothing —
 // the same silently-dead-exclusion failure expandDirPath already guards against.
 func TestCompileLeaksIgnoreGroupsUndefined(t *testing.T) {

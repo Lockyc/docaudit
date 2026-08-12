@@ -449,10 +449,28 @@ func resolveLeaksConfig(flagVal string) (string, error) {
 	return filepath.Join(dir, "docgraph", "leaks.toml"), nil
 }
 
+// loadLeakConfig decodes the global leaks.toml, rejecting any key the schema
+// doesn't recognize. toml.DecodeFile silently ignores unknown keys by
+// default, which is exactly the failure mode groups introduced: a typo like
+// "ignore_group" for "ignore_groups" decodes with err == nil and a
+// zero-value field, so a [[dir]] silently falls back to the DefaultGroup
+// default instead of the named group the owner meant — inverting which deny
+// class a blanket ignore leaves live. Checking MetaData.Undecoded() turns
+// that into the same fatal-config path a malformed TOML file already takes.
 func loadLeakConfig(path string) (audit.LeakConfig, error) {
 	var cfg audit.LeakConfig
-	_, err := toml.DecodeFile(path, &cfg)
-	return cfg, err
+	md, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
+		return cfg, err
+	}
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, len(undecoded))
+		for i, k := range undecoded {
+			keys[i] = k.String()
+		}
+		return cfg, fmt.Errorf("unknown key(s): %s", strings.Join(keys, ", "))
+	}
+	return cfg, nil
 }
 
 // printReport prints the outcome of the checks being run and reports whether any

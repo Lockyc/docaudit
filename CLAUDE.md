@@ -202,8 +202,7 @@ restating the vocabulary, so the schema and the checks can't drift apart.
     `["default"]`) decides what an ignore glob silences. The blanket
     `ignore = ["**"]` a private repo needs for its own footprint vocabulary must
     not blind the scan to terms that may not appear in ANY repo — that conflation
-    is the bug groups exist to fix, and it hid 68 real cross-boundary occurrences
-    across the owner's private repos. A repo that legitimately owns a class names
+    is the bug groups exist to fix. A repo that legitimately owns a class names
     the class in `ignore_groups`, or its individual strings in `allow`; there is
     still no per-file marker. `ReplaceTextRules` exports every group's rules, so a
     history scrub covers them too.
@@ -240,8 +239,8 @@ restating the vocabulary, so the schema and the checks can't drift apart.
 - **No inline suppression markers — every control is config or CLI.** docgraph
   never parses a suppression comment/pragma out of the files it audits.
   Suppression is *only* `.docgraphignore`/`--ignore`/`--skip` (doc-graph scope)
-  and the leaks config's `allow`/`allow_regex`/`[[dir]]` `ignore` + `ignore_groups`
-  (leak scope);
+  and the leaks config's `allow`/`allow_regex`, and a `[[dir]]`'s `ignore` +
+  `ignore_groups` (leak scope);
   `footgun-drift`/`covers-drift`/`doc-drift` have no in-file escape, opted out only
   whole-check via `DOCGRAPH_FOOTGUN_OFF=1`/`--no-footgun-drift`,
   `DOCGRAPH_COVERS_OFF=1`/`--no-covers-drift`, and `DOC_DRIFT_OFF=1`. Deliberate: an

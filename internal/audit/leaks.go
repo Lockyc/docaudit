@@ -164,6 +164,9 @@ func (c LeakConfig) compile() (compiledLeaks, error) {
 		if defined[name] {
 			return compiledLeaks{}, fmt.Errorf("leaks [[group]] %q: duplicate group name", name)
 		}
+		if countNonEmpty(g.Terms)+countNonEmpty(g.Regex) == 0 {
+			return compiledLeaks{}, fmt.Errorf("leaks [[group]] %q: no terms or regex — it would never deny", name)
+		}
 		defined[name] = true
 		addLit(&cl.deny, g.Terms, name)
 		if err := addRe(&cl.deny, g.Regex, name, fmt.Sprintf("leaks [[group]] %q regex", name)); err != nil {
@@ -185,11 +188,15 @@ func (c LeakConfig) compile() (compiledLeaks, error) {
 		} else if len(d.Ignore) == 0 {
 			return compiledLeaks{}, fmt.Errorf("leaks [[dir]] %q: ignore_groups set with no ignore globs — it would never apply", d.Path)
 		}
-		for _, g := range groups {
+		trimmed := make([]string, len(groups))
+		for i, g := range groups {
+			g = strings.TrimSpace(g)
+			trimmed[i] = g
 			if !defined[g] {
 				return compiledLeaks{}, fmt.Errorf("leaks [[dir]] %q: ignore_groups names undefined group %q", d.Path, g)
 			}
 		}
+		groups = trimmed
 		cd := compiledDir{path: path, ignore: d.Ignore, ignoreGroups: groups}
 		addLit(&cd.allow, d.Allow, "")
 		if err := addRe(&cd.allow, d.AllowRegex, "", fmt.Sprintf("leaks [[dir]] %q allow_regex", d.Path)); err != nil {
