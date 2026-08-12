@@ -313,7 +313,7 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 
 // scanLine returns findings for one line: deny matches not covered by an allow
 // span. A deny span [s,e) is covered iff some allow rule matches [as,ae) with
-// as<=s && ae>=e (e.g. `lsjc` inside an allowed `au.lsjc.curator`).
+// as<=s && ae>=e (e.g. `acme` inside an allowed `com.acme.viewer`).
 func scanLine(file string, lineNo int, line string, deny, allow []matcher) []LeakFinding {
 	var allowSpans [][]int
 	for _, a := range allow {
