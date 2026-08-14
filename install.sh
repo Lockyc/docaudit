@@ -45,6 +45,11 @@ CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/docgraph"
 mkdir -p "$CFG_DIR"
 
 # `docgraph version` prints "docgraph <ver>"; keep just the version token.
+# This exec is also LOAD-BEARING beyond the version string — see the cold-exec footgun in
+# CLAUDE.md: the first exec of a freshly written binary blocks in dyld for a live
+# code-signature assessment (~1s on macOS). Running it here absorbs that while the user is
+# already waiting on the install, instead of on their next doc-drift Stop hook. Do not
+# "simplify" this to reading the VERSION file — that would silently reinstate the toll.
 VERSION="$("$BIN_DIR/docgraph" version 2>/dev/null | awk '{print $NF}' || echo "")"
 
 echo ""

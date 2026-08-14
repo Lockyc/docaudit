@@ -419,8 +419,15 @@ docs/" with zero config.
   finding), `runDocDrift(args, stdin, stdout, stderr) int` (the Stop-hook
   subcommand — checks `DOC_DRIFT_OFF`, resolves the diff spec via
   `docDriftDiffBase`, calls `audit.DocDrift`, and on a finding prints via
-  `printDocDrift` to stderr and returns 2, gated on bare invocation by
-  `docDriftGuardOK`'s once-per-HEAD marker under `docDriftStateDir()`),
+  `printDocDrift` to stderr and returns 2, gated on bare invocation by a
+  once-per-HEAD nag marker under `docDriftStateDir()`
+  (`docDriftNaggedAt`/`docDriftRecordNag`) — checked *before* the diff, since a
+  HEAD already nagged exits 0 down every remaining path, so scanning it again is
+  pure waste on a per-turn hook. `docDriftDiffBase` memoizes its answer per
+  (repo, HEAD) beside that marker (`readDocDriftBase`/`writeDocDriftBase`, keyed
+  via `docDriftStatePath`): `audit.ClosestBase` costs a dozen git subprocesses —
+  ~85% of a warm run — to recompute a value that only moves when HEAD does. A
+  stale memo fails safe (an ancestor base = superset diff = over-report)),
   `runCovers`/`runIndex`/`runStale`/`runGraph` (the read-only views — each
   resolves the repo root, calls `audit.RepoDocs` (or `audit.BuildGraphView` for
   `runGraph`, which also takes `--json`), and prints; always `return 0`), report
@@ -552,6 +559,34 @@ agent harnesses push with a bare PATH that omits `~/go/bin`, so a `command -v`-o
 lookup fail-closes the gate on a *present-but-invisible* binary — which reads as
 "docgraph is broken" and trains agents to reach for `--no-verify`. Do not narrow the
 Go-bin fallback back to `command -v`.
+
+## Footgun — every install path must exec the new binary once, or `doc-drift` costs ~1s a turn
+
+`doc-drift` is a **Stop hook**: it runs at the end of every agent turn, so its cost is
+paid continuously and a regression is felt immediately rather than found later.
+
+A freshly written binary has a new cdhash, which is a code-signature cache miss **by
+definition**. On macOS the first exec then blocks in `dyld` at `_dyld_start` waiting for
+a live Gatekeeper (`syspolicyd`) assessment — measured 2026-08-14 at **~1.0s** for this
+binary (4.7 MB) versus **~0.03s** warm, reproduced by `go install` (first exec 1.10s,
+next three 0.14/0.12/0.13s) and by copying the binary to a fresh path (1.12s / 0.14s).
+So every rebuild silently re-arms a ~1s toll that lands on the *next* turn's Stop hook —
+in this repo, where docgraph is what you are rebuilding, on turn after turn.
+
+The fix is that **every install path execs the new binary once**, absorbing the
+assessment where someone is already waiting on a build: `just install` runs
+`"$bin/docgraph" version`, and `install.sh` / `/docgraph:install` already exec it for the
+version string.
+
+**The trap is that those execs read as cosmetic** — a smoke test, or a version string you
+could get by reading the `VERSION` file — so the tempting cleanup is to drop them. Doing
+that reinstates the toll on every consumer, invisibly: nothing fails, no test goes red,
+the gate stays green, and the only symptom is that turns end a second slower. Keep the
+exec, and keep it last so it also proves the install landed.
+
+Not fixable inside docgraph, and worth knowing: the assessment can be skipped entirely by
+registering the *launching* app under System Settings ▸ Privacy & Security ▸ Developer
+Tools. That is per-machine operator config, not something a released binary can arrange.
 
 ## v1 gaps (documented, not silent)
 

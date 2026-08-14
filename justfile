@@ -11,8 +11,17 @@ build:
 test:
     go test ./...
 
+# install to the Go bin dir, then exec the new binary once.
+# That exec is LOAD-BEARING, not a smoke test — see the cold-exec footgun in CLAUDE.md:
+# a freshly written binary has a new cdhash, so its FIRST exec blocks in dyld for a live
+# code-signature assessment (~1s for this binary on macOS). Absorbing it here, where you
+# are already waiting on a build, keeps it off the next doc-drift Stop hook.
 install:
+    #!/usr/bin/env bash
+    set -euo pipefail
     go install .
+    bin="$(go env GOBIN)"; [ -n "$bin" ] || bin="$(go env GOPATH)/bin"
+    "$bin/docgraph" version
 
 fmt:
     gofmt -w .

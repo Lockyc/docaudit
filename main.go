@@ -836,18 +836,27 @@ func runDocDrift(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	guard := *rangeFlag == ""
 	spec := *rangeFlag
-	if spec == "" {
-		spec = docDriftDiffBase(root)
-	}
-
-	if guard && exec.Command("git", "-C", root, "rev-parse", "HEAD").Run() != nil {
-		// Unborn HEAD (a freshly `git init`'d repo, no commits yet): bare mode
-		// resolved spec to "HEAD" via docDriftDiffBase's own rev-parse fallback,
-		// but `git diff HEAD` against an unborn HEAD exits 128 — a real git error,
-		// not a doc-drift finding. Blocking the Stop on that would gate every turn
-		// during repo bootstrap, before there's any commit to diff against. --range
-		// mode is unaffected: an explicit ref is the caller's responsibility.
-		return 0
+	var head string
+	if guard {
+		h, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+		if err != nil {
+			// Unborn HEAD (a freshly `git init`'d repo, no commits yet): there is no
+			// commit to diff against, and `git diff HEAD` on one exits 128 — a real
+			// git error, not a doc-drift finding. Blocking the Stop on that would gate
+			// every turn during repo bootstrap. --range mode is unaffected: an
+			// explicit ref is the caller's responsibility.
+			return 0
+		}
+		head = strings.TrimSpace(string(h))
+		// Already nagged at this HEAD? Then EVERY path below ends in exit 0 (no
+		// findings -> 0; findings -> suppressed by the guard -> 0), so resolving the
+		// base and running the diff+greps is pure waste on a hook that fires once
+		// per turn. Short-circuit. Exit codes are unchanged by construction — this
+		// is the same decision, taken before the work instead of after it.
+		if docDriftNaggedAt(root) == head {
+			return 0
+		}
+		spec = docDriftDiffBase(root, head)
 	}
 
 	findings, err := audit.DocDrift(root, spec)
@@ -858,8 +867,8 @@ func runDocDrift(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(findings) == 0 {
 		return 0
 	}
-	if guard && !docDriftGuardOK(root) {
-		return 0 // already nagged for this HEAD
+	if guard {
+		docDriftRecordNag(root, head)
 	}
 	printDocDrift(stderr, findings)
 	return 2
@@ -867,42 +876,93 @@ func runDocDrift(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 // docDriftDiffBase resolves what to `git diff` against: the closest integration
 // branch's merge-base if this work sits ahead of it, else "HEAD" (on a trunk
-// branch the change set IS the working tree — uncommitted only).
-func docDriftDiffBase(root string) string {
-	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return "HEAD"
-	}
-	h := strings.TrimSpace(string(head))
-	if base, ok := audit.ClosestBase(root, "HEAD"); ok && base != "" && base != h {
+// branch the change set IS the working tree — uncommitted only). Memoized per
+// (repo, HEAD), because audit.ClosestBase costs a merge-base + a rev-list per
+// integration-branch candidate — a dozen git subprocesses, ~85% of a warm
+// doc-drift run, re-derived on every Stop hook to recompute an answer that only
+// changes when HEAD does.
+//
+// Staleness is bounded and fails SAFE. The memo can only go stale when an
+// integration branch advances while HEAD stays put (i.e. a fetch), and the
+// remembered base is then an ANCESTOR of the true one — a superset diff, so
+// doc-drift over-reports rather than missing drift. The next commit re-keys it.
+func docDriftDiffBase(root, head string) string {
+	if base, ok := readDocDriftBase(root, head); ok {
 		return base
 	}
-	return "HEAD"
+	spec := "HEAD"
+	if base, ok := audit.ClosestBase(root, "HEAD"); ok && base != "" && base != head {
+		spec = base
+	}
+	writeDocDriftBase(root, head, spec)
+	return spec
 }
 
-// docDriftGuardOK reports whether to nag for this repo at its current HEAD.
-// Returns true at most once per (repo, HEAD): the first true records HEAD so a
-// repeat call returns false. Each commit moves HEAD, re-arming — so a blocked
-// Stop can be resolved by committing, or by simply stopping again once the
-// finding has been judged intentional.
-func docDriftGuardOK(root string) bool {
-	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return true // unborn HEAD -> don't suppress
-	}
-	h := strings.TrimSpace(string(head))
+// docDriftStatePath is the per-repo state file for suffix — "" is the nag marker,
+// ".base" the memoized diff base — or "" when no state dir resolves.
+func docDriftStatePath(root, suffix string) string {
 	dir := docDriftStateDir()
 	if dir == "" {
-		return true // can't resolve state dir -> never suppress
+		return ""
 	}
 	sum := sha256.Sum256([]byte(root))
-	marker := filepath.Join(dir, hex.EncodeToString(sum[:])[:16])
-	if b, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(b)) == h {
-		return false
+	return filepath.Join(dir, hex.EncodeToString(sum[:])[:16]+suffix)
+}
+
+// readDocDriftBase returns the base memoized for head, if the stored entry is
+// keyed to that exact HEAD.
+func readDocDriftBase(root, head string) (string, bool) {
+	p := docDriftStatePath(root, ".base")
+	if p == "" {
+		return "", false
 	}
-	_ = os.MkdirAll(dir, 0o755)
-	_ = os.WriteFile(marker, []byte(h), 0o644)
-	return true
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "", false
+	}
+	h, spec, ok := strings.Cut(strings.TrimSpace(string(b)), " ")
+	if !ok || h != head || spec == "" {
+		return "", false
+	}
+	return spec, true
+}
+
+// writeDocDriftBase memoizes spec against head. Best-effort: a state dir that
+// can't be written just means the next run re-resolves.
+func writeDocDriftBase(root, head, spec string) {
+	p := docDriftStatePath(root, ".base")
+	if p == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	_ = os.WriteFile(p, []byte(head+" "+spec), 0o644)
+}
+
+// docDriftNaggedAt returns the HEAD this repo was last nagged at, or "" for
+// never (including an unresolvable state dir, which must never suppress).
+func docDriftNaggedAt(root string) string {
+	p := docDriftStatePath(root, "")
+	if p == "" {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// docDriftRecordNag records head as nagged, so the repo is nagged at most once
+// per (repo, HEAD). Each commit moves HEAD, re-arming — so a blocked Stop can be
+// resolved by committing, or by simply stopping again once the finding has been
+// judged intentional.
+func docDriftRecordNag(root, head string) {
+	p := docDriftStatePath(root, "")
+	if p == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	_ = os.WriteFile(p, []byte(head), 0o644)
 }
 
 // docDriftStateDir resolves $XDG_STATE_HOME/docgraph/doc-drift (default

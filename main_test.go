@@ -977,6 +977,81 @@ func TestDocDriftLoopGuardNagsOncePerHead(t *testing.T) {
 	}
 }
 
+// setupDriftRepoMain builds a committed repo whose working tree has removed a
+// symbol a doc still names — i.e. a bare doc-drift run finds drift. Returns the
+// repo dir and the root as audit.GitRoot resolves it (macOS symlinks /var ->
+// /private/var, so the state-file key is derived from the RESOLVED root).
+func setupDriftRepoMain(t *testing.T) (dir, root, head string) {
+	t.Helper()
+	dir = setupRepoMain(t, map[string]string{
+		"x.go": "type OldWidget struct{}\n", "CLAUDE.md": "We use OldWidget.\n",
+	})
+	git := func(a ...string) []byte {
+		out, err := exec.Command("git", append([]string{"-C", dir}, a...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", a, err, out)
+		}
+		return out
+	}
+	git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base")
+	os.WriteFile(filepath.Join(dir, "x.go"), []byte("package x\n"), 0o644) // uncommitted removal
+	root, err := audit.GitRoot(dir)
+	if err != nil {
+		t.Fatalf("GitRoot: %v", err)
+	}
+	head = strings.TrimSpace(string(git("rev-parse", "HEAD")))
+	return dir, root, head
+}
+
+// TestDocDriftAlreadyNaggedSkipsScan pins the loop-guard SHORT-CIRCUIT: once a
+// HEAD has been nagged, every remaining path returns 0, so the base resolution
+// and the diff must not run at all. Asserted structurally rather than by timing:
+// the memoized base is poisoned with an unresolvable ref between the two runs,
+// which would make a still-scanning second run exit 2 on the git error.
+func TestDocDriftAlreadyNaggedSkipsScan(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir, root, head := setupDriftRepoMain(t)
+
+	if code := runDocDrift([]string{dir}, strings.NewReader(""), io.Discard, io.Discard); code != 2 {
+		t.Fatalf("first bare run must block -> want exit 2, got %d", code)
+	}
+	writeDocDriftBase(root, head, "definitely-not-a-ref")
+	if code := runDocDrift([]string{dir}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
+		t.Fatalf("already nagged -> want exit 0 without scanning, got %d", code)
+	}
+}
+
+// TestDocDriftMemoizesDiffBase pins that a bare run records the resolved base
+// keyed by HEAD. ClosestBase costs a merge-base + rev-list per integration-branch
+// candidate — ~85% of a warm run, re-derived on every Stop hook without this.
+func TestDocDriftMemoizesDiffBase(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir, root, head := setupDriftRepoMain(t)
+
+	runDocDrift([]string{dir}, strings.NewReader(""), io.Discard, io.Discard)
+
+	got, ok := readDocDriftBase(root, head)
+	if !ok {
+		t.Fatalf("bare run did not memoize a diff base for HEAD %s", head)
+	}
+	if got != "HEAD" { // setupRepoMain checks out `wip`: no integration-branch candidate
+		t.Fatalf("memoized base = %q, want %q", got, "HEAD")
+	}
+}
+
+// TestDocDriftBaseCacheKeyedByHead pins that an entry written for a DIFFERENT
+// HEAD is ignored — the cache must re-resolve when HEAD moves, or a branch
+// switch would keep diffing against the previous branch's base.
+func TestDocDriftBaseCacheKeyedByHead(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	_, root, head := setupDriftRepoMain(t)
+
+	writeDocDriftBase(root, "0000000000000000000000000000000000000000", "stale-base")
+	if got, ok := readDocDriftBase(root, head); ok {
+		t.Fatalf("entry for another HEAD must not be used, got %q", got)
+	}
+}
+
 func TestRunSchema(t *testing.T) {
 	var buf bytes.Buffer
 	if code := runSchema(&buf); code != 0 {
