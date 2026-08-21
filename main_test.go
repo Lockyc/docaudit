@@ -1214,3 +1214,23 @@ func TestPrintReportEdgesHeaderCountsCycles(t *testing.T) {
 		t.Errorf("cycle-only report should show EDGES (1), got:\n%s", buf.String())
 	}
 }
+
+// Go's flag package stops parsing at the first non-flag argument, so `docgraph .
+// --skip leaks` used to silently drop the skip and run the check anyway. A gate
+// flag that quietly does nothing is worse than one that errors.
+func TestFlagsParseAfterPositionalPath(t *testing.T) {
+	call := func(args ...string) (string, int) {
+		var out, errb bytes.Buffer
+		code := run(args, &out, &errb)
+		return out.String() + errb.String(), code
+	}
+	before, codeBefore := call("--skip", "leaks,orphans,broken,untracked,frontmatter,edges,disconnected", ".")
+	after, codeAfter := call(".", "--skip", "leaks,orphans,broken,untracked,frontmatter,edges,disconnected")
+	if before != after || codeBefore != codeAfter {
+		t.Errorf("flags must parse the same before and after the path\n before (%d): %q\n after  (%d): %q",
+			codeBefore, before, codeAfter, after)
+	}
+	if !strings.Contains(after, "every check skipped") {
+		t.Errorf("a --skip after the path must take effect, got %q", after)
+	}
+}

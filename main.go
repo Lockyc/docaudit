@@ -90,16 +90,16 @@ func runInstallHook(args []string, stdout, stderr io.Writer) int {
 	force := fs.Bool("force", false, "overwrite an existing .githooks/pre-push")
 	noFootgun := fs.Bool("no-footgun-drift", false, "omit the diff-scoped footgun-drift check from the generated hook")
 	noCovers := fs.Bool("no-covers-drift", false, "omit the diff-scoped covers-drift check from the generated hook")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	positional, perr := parseArgs(fs, args)
+	if perr != nil {
 	}
 	if _, err := parseSkip(*skip); err != nil {
 		fmt.Fprintf(stderr, "docgraph: %v\n", err)
 		return 2
 	}
 	path := "."
-	if fs.NArg() > 0 {
-		path = fs.Arg(0)
+	if len(positional) > 0 {
+		path = positional[0]
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
@@ -144,7 +144,7 @@ func runLeaksRules(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("docgraph leaks-rules", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	leaksConfig := fs.String("leaks-config", "", "path to the global leaks.toml (default: $DOCGRAPH_LEAKS or $XDG_CONFIG_HOME/docgraph/leaks.toml, else ~/.config/docgraph/leaks.toml)")
-	if err := fs.Parse(args); err != nil {
+	if _, perr := parseArgs(fs, args); perr != nil {
 		return 2
 	}
 	cfgPath, err := resolveLeaksConfig(*leaksConfig)
@@ -271,8 +271,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	skip := fs.String("skip", "", "checks to EXCLUDE, comma-separated (default: none — all enforced: orphans,broken,untracked,leaks,frontmatter,edges,disconnected)")
 	leaksConfig := fs.String("leaks-config", "", "path to the global leaks.toml (default: $DOCGRAPH_LEAKS or $XDG_CONFIG_HOME/docgraph/leaks.toml, else ~/.config/docgraph/leaks.toml)")
 	config := fs.String("config", "", "path to the global config.toml, holding [log] (default: $DOCGRAPH_CONFIG or $XDG_CONFIG_HOME/docgraph/config.toml)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	positional, perr := parseArgs(fs, args)
+	if perr != nil {
 	}
 	selected, err := parseSkip(*skip)
 	if err != nil {
@@ -283,8 +283,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "docgraph: every check skipped — nothing is being enforced")
 	}
 	path := "."
-	if fs.NArg() > 0 {
-		path = fs.Arg(0)
+	if len(positional) > 0 {
+		path = positional[0]
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
@@ -404,6 +404,29 @@ func loadLogConfig(path string) (audit.LogConfig, error) {
 // default; skipping is the explicit, per-repo exception (e.g. a nav-driven MkDocs
 // repo skips orphans). A newly-added check is enforced everywhere automatically —
 // nobody has to remember to add it to a run-list.
+// parseArgs parses flags that appear ANYWHERE in args, returning the positional
+// arguments. Go's flag package stops at the first non-flag argument, so a plain
+// fs.Parse turns `docgraph . --skip leaks` into path="." plus two ignored
+// strings: the skip is silently dropped and the check it named runs anyway. A
+// gate flag that quietly does nothing is the exact failure this tool exists to
+// prevent, and it reads as "docgraph ignored me" rather than as a usage error.
+// Re-parsing what follows each positional lets flag itself decide which tokens
+// are flag values, so `--ignore x` is never mistaken for a positional.
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	rest := args
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return positional, nil
+		}
+		positional = append(positional, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
+}
+
 func parseSkip(s string) (map[string]bool, error) {
 	sel := map[string]bool{}
 	for _, name := range checkNames {
@@ -635,12 +658,12 @@ func runFootgunDrift(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("docgraph footgun-drift", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rangeFlag := fs.String("range", "", "explicit base..head to check (else read pre-push stdin)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	positional, perr := parseArgs(fs, args)
+	if perr != nil {
 	}
 	path := "."
-	if fs.NArg() > 0 {
-		path = fs.Arg(0)
+	if len(positional) > 0 {
+		path = positional[0]
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
@@ -759,12 +782,12 @@ func runCoversDrift(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	fs := flag.NewFlagSet("docgraph covers-drift", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rangeFlag := fs.String("range", "", "explicit base..head to check (else read pre-push stdin)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	positional, perr := parseArgs(fs, args)
+	if perr != nil {
 	}
 	path := "."
-	if fs.NArg() > 0 {
-		path = fs.Arg(0)
+	if len(positional) > 0 {
+		path = positional[0]
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
@@ -819,12 +842,12 @@ func runDocDrift(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("docgraph doc-drift", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rangeFlag := fs.String("range", "", "explicit git-diff spec (base, base..head) — bypasses the loop-guard")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	positional, perr := parseArgs(fs, args)
+	if perr != nil {
 	}
 	path := "."
-	if fs.NArg() > 0 {
-		path = fs.Arg(0)
+	if len(positional) > 0 {
+		path = positional[0]
 	}
 	// Drain the Stop payload (bare mode sends JSON on stdin); unused.
 	_, _ = io.Copy(io.Discard, stdin)
@@ -1053,10 +1076,10 @@ func runCovers(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var ignores multiFlag
 	fs.Var(&ignores, "ignore", "glob to exclude (repeatable)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	positional, perr := parseArgs(fs, args)
+	if perr != nil {
 	}
-	if fs.NArg() < 1 {
+	if len(positional) < 1 {
 		fmt.Fprintln(stderr, "docgraph: usage: docgraph covers <repo-relative-path>")
 		return 2
 	}
@@ -1070,7 +1093,7 @@ func runCovers(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "docgraph: %v\n", err)
 		return 2
 	}
-	for _, src := range audit.CoversOf(docs, fs.Arg(0)) {
+	for _, src := range audit.CoversOf(docs, positional[0]) {
 		fmt.Fprintln(stdout, src)
 	}
 	return 0
@@ -1083,7 +1106,7 @@ func runIndex(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var ignores multiFlag
 	fs.Var(&ignores, "ignore", "glob to exclude (repeatable)")
-	if err := fs.Parse(args); err != nil {
+	if _, perr := parseArgs(fs, args); perr != nil {
 		return 2
 	}
 	root, err := audit.GitRoot(".")
@@ -1109,7 +1132,7 @@ func runStale(args []string, stdout, stderr io.Writer) int {
 	var ignores multiFlag
 	fs.Var(&ignores, "ignore", "glob to exclude (repeatable)")
 	olderThan := fs.Int("older-than", 180, "default staleness threshold in days (a per-doc `review:` cadence overrides it)")
-	if err := fs.Parse(args); err != nil {
+	if _, perr := parseArgs(fs, args); perr != nil {
 		return 2
 	}
 	root, err := audit.GitRoot(".")
@@ -1141,7 +1164,7 @@ func runGraph(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&ignores, "ignore", "glob to exclude (repeatable)")
 	asJSON := fs.Bool("json", false, "emit the graph as JSON (schemaVersion-stamped)")
 	ref := fs.String("ref", "", "read the graph from this git ref (e.g. HEAD, dev); works on a bare repo, reads committed state not the working tree")
-	if err := fs.Parse(args); err != nil {
+	if _, perr := parseArgs(fs, args); perr != nil {
 		return 2
 	}
 
