@@ -124,6 +124,12 @@ Scans **tracked file content** (working tree only, never git history) for
 secret / owner-specific strings, to catch them before a repo goes public. Runs by
 default; `--skip leaks` turns it off.
 
+It is also the only check whose cost you will notice, since it reads every
+tracked file rather than just the docs: roughly proportional to tracked bytes and
+to the number of rules, it runs in ~6s on a 9.7k-file repo tracking ~1GB and 14M
+lines, against ~0.3s for all six doc-graph checks combined there. Binaries are
+skipped on a prefix probe, so vendored archives cost little.
+
 Scope is governed by **git tracking**, not the doc-graph ignore layers: every
 `git ls-files` entry is scanned (so `.gitignore` decides what's excluded), and
 `defaultIgnores` / `.docgraphignore` do **not** narrow it — only an explicit
@@ -466,6 +472,7 @@ absent is a false green.
 
 ```bash
 docgraph [path]                     # path defaults to '.'; enforces all checks
+                                    # flags may appear before or after the path
 docgraph --root wiki/Home.md        # add an extra entry point (repeatable)
 docgraph --ignore 'vendor/**'       # exclude a glob from checks (repeatable)
 docgraph --skip orphans             # exclude a check (comma-separated)
