@@ -743,21 +743,36 @@ func rangesFromPrePushStdin(r io.Reader, root string) []audit.RevRange {
 // printFootgunDrift renders findings with the two-question remediation. This is
 // advisory (the caller exits 0): the message exists to prompt a double-check, not
 // to justify a block.
+// footgunEchoRunes caps how much of a declaration line is echoed. The file:line
+// is what makes a finding actionable — you open the file to judge it, since no
+// terminal echo tells you whether a stated rationale is real. The line itself is
+// only there to say WHICH declaration, so it is trimmed to a recognisable head.
+// Untrimmed it dominated the output: on one real push, nine findings echoed 6.1k
+// characters of CLAUDE.md prose (single lines up to 2k) around 270 characters of
+// actual payload — a per-push tax on the reader, and on an agent's context when
+// the agent is the one pushing.
+const footgunEchoRunes = 100
+
+// echoLine trims a declaration line to footgunEchoRunes, rune-safe.
+func echoLine(s string) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= footgunEchoRunes {
+		return string(r)
+	}
+	return string(r[:footgunEchoRunes]) + "…"
+}
+
 func printFootgunDrift(w io.Writer, fs []audit.FootgunFinding) {
 	bar := strings.Repeat("─", 82)
-	fmt.Fprintf(w, "FOOTGUNS (%d) — footgun declaration(s) added in this push. This is ADVISORY: the\n", len(fs))
-	fmt.Fprintln(w, "push was NOT blocked. Go verify each is a real footgun, not a note-just-in-case:")
+	fmt.Fprintf(w, "FOOTGUNS (%d) added in this push — ADVISORY, the push was NOT blocked. Verify each\n", len(fs))
+	fmt.Fprintln(w, "is a real footgun (a trap hit, a tempting-but-wrong path, or a re-litigated")
+	fmt.Fprintln(w, "decision, recorded WITH its why) and at the right level — invariant → CLAUDE.md,")
+	fmt.Fprintln(w, "deep rationale → docs/, human prose → README. Open each to judge it:")
 	for _, f := range fs {
-		fmt.Fprintf(w, "  %s:%d → %s\n", f.File, f.Line, f.Text)
+		fmt.Fprintf(w, "  %s:%d → %s\n", f.File, f.Line, echoLine(f.Text))
 	}
-	fmt.Fprintln(w, bar)
-	fmt.Fprintln(w, "For each, confirm:")
-	fmt.Fprintln(w, "  (1) Is it a real footgun? — a trap you hit, a tempting-but-wrong approach, or a")
-	fmt.Fprintln(w, "      re-litigated decision, recorded WITH its rationale (the \"why\").")
-	fmt.Fprintln(w, "  (2) Is it at the right level? — invariant/footgun → CLAUDE.md; deep rationale →")
-	fmt.Fprintln(w, "      docs/; human-facing prose → README.")
-	fmt.Fprintln(w, "If any is just a note-just-in-case, reword it as a plain note or remove it (a")
-	fmt.Fprintln(w, "follow-up commit is fine — docgraph did not hold the push).")
+	fmt.Fprintln(w, "Reword any note-just-in-case as a plain note, or drop it — a follow-up commit is")
+	fmt.Fprintln(w, "fine, docgraph did not hold the push.")
 	fmt.Fprintln(w, bar)
 }
 

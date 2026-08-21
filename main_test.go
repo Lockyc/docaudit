@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/lockyc/docgraph/v3/internal/audit"
 )
@@ -1232,5 +1233,33 @@ func TestFlagsParseAfterPositionalPath(t *testing.T) {
 	}
 	if !strings.Contains(after, "every check skipped") {
 		t.Errorf("a --skip after the path must take effect, got %q", after)
+	}
+}
+
+// A footgun declaration can be a 2000-character CLAUDE.md paragraph. The echo
+// exists to say WHICH declaration, not to be read in the terminal, so it is
+// capped — untrimmed it buried the file:line payload it is attached to.
+func TestFootgunDriftEchoIsTrimmed(t *testing.T) {
+	long := "- **Footgun — " + strings.Repeat("x", 2000) + "**"
+	var out bytes.Buffer
+	printFootgunDrift(&out, []audit.FootgunFinding{{File: "CLAUDE.md", Line: 117, Text: long}})
+	got := out.String()
+	if !strings.Contains(got, "CLAUDE.md:117") {
+		t.Errorf("the file:line payload must survive: %q", got)
+	}
+	if strings.Contains(got, strings.Repeat("x", footgunEchoRunes+1)) {
+		t.Errorf("declaration echo must be capped at %d runes, got %q", footgunEchoRunes, got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("a trimmed echo must be marked with an ellipsis: %q", got)
+	}
+}
+
+// Trimming is rune-safe: it must never split a multi-byte character.
+func TestFootgunDriftEchoIsRuneSafe(t *testing.T) {
+	var out bytes.Buffer
+	printFootgunDrift(&out, []audit.FootgunFinding{{File: "d.md", Line: 1, Text: strings.Repeat("é", 300)}})
+	if !utf8.ValidString(out.String()) {
+		t.Errorf("trimmed echo must stay valid UTF-8: %q", out.String())
 	}
 }
