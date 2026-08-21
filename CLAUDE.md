@@ -560,6 +560,33 @@ lookup fail-closes the gate on a *present-but-invisible* binary — which reads 
 "docgraph is broken" and trains agents to reach for `--no-verify`. Do not narrow the
 Go-bin fallback back to `command -v`.
 
+## Footgun — the leaks scan is ~95% of the runtime, and its prefilter must only ever widen
+
+The doc-graph work is not the cost. On a 9.7k-file repo (~14M tracked lines,
+~1GB tracked) the seven whole-state checks measure **~0.3s combined**, while
+`leaks` measured **~25s** — because `scanLine` runs one `FindAllStringIndex` per
+rule per line, over every tracked non-binary file. So the profile is inverted
+from where the interesting code is: an optimisation aimed at `BuildContentGraph`
+or `parseDocs` buys nothing measurable, and a change that adds a per-line rule
+pass to `leaks` costs seconds per push.
+
+Two things now stand between the rules and that loop, and both are the kind that
+look safe to tighten:
+
+- **`scanFilter` (`mayMatch`) is a whole-file prefilter, and it must be a strict
+  SUPERSET of the rules.** Anything it rejects is never scanned line-by-line, so
+  narrowing it is a *silently missed leak* — no finding, green gate, exit 0. That
+  is why an ASCII literal gets the fast case-folded substring path but a
+  non-ASCII one keeps its regexp (byte-wise lowercase is not Unicode folding),
+  and why an uncompilable alternation degrades to "no regex prefilter" rather
+  than to "no match". `TestLeakScanLiteralDenySurvivesPrefilterCasing`,
+  `TestLeakScanNonASCIILiteralDenyStillMatches` and
+  `TestLeakScanMatchBeyondBinaryProbeWindow` are what stop this regressing.
+- **`readTextFile` decides binary-ness from a `binaryProbeBytes` prefix, then
+  reads the rest.** Dropping the second read to "just scan the head" would look
+  like a further win and would silently stop scanning past the first 8000 bytes
+  of every file.
+
 ## Footgun — every install path must exec the new binary once, or `doc-drift` costs ~1s a turn
 
 `doc-drift` is a **Stop hook**: it runs at the end of every agent turn, so its cost is

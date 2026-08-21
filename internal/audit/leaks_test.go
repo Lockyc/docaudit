@@ -429,3 +429,64 @@ func TestLeakScanIgnoreDoesNotDropOtherDirsAllows(t *testing.T) {
 		t.Errorf("parent allow + child default-ignore should leave nothing, got %+v", found)
 	}
 }
+
+// The whole-file prefilter (scanFilter) must be a SUPERSET of the per-line rules:
+// anything it rejects is never scanned, so a narrowing bug is a silently missed
+// leak. These four pin the ways it could narrow.
+
+// A literal term is prefiltered by case-folded substring search — it must still
+// catch a casing the config never wrote.
+func TestLeakScanLiteralDenySurvivesPrefilterCasing(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"a.md": "host CoReHoSt-prod here\n"}, []string{"a.md"})
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"corehost"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("literal deny must survive the prefilter in any casing, got %+v", found)
+	}
+}
+
+// A non-ASCII literal keeps its regexp in the prefilter rather than a ToLower
+// substring test, because Unicode folding is not byte-wise lowercase.
+func TestLeakScanNonASCIILiteralDenyStillMatches(t *testing.T) {
+	dir := setupRepo(t, map[string]string{"a.md": "client Kaffeehaus Straße GmbH\n"}, []string{"a.md"})
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"straße"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("a non-ASCII literal term must still match, got %+v", found)
+	}
+}
+
+// readTextFile reads a prefix to decide binary-ness and then the rest: a match
+// past that prefix must still be found, or every long file is silently truncated.
+func TestLeakScanMatchBeyondBinaryProbeWindow(t *testing.T) {
+	body := strings.Repeat("filler line of harmless text\n", 1000) + "host corehost-prod\n"
+	if len(body) <= binaryProbeBytes {
+		t.Fatalf("fixture must exceed the %d-byte probe window, got %d", binaryProbeBytes, len(body))
+	}
+	dir := setupRepo(t, map[string]string{"a.md": body}, []string{"a.md"})
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"corehost"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("a match past the binary-probe window must still be found, got %+v", found)
+	}
+}
+
+// An allow span is computed lazily, on the first deny hit — it must still
+// suppress a match that occurs only late in a file.
+func TestLeakScanAllowSuppressesOnLateLine(t *testing.T) {
+	body := strings.Repeat("nothing to see here\n", 500) + "id au.example.curator ok\n"
+	dir := setupRepo(t, map[string]string{"a.md": body}, []string{"a.md"})
+	found, err := LeakScan(dir, LeakConfig{Terms: []string{"example"}, Allow: []string{"au.example.curator"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("allow must suppress a late match too, got %+v", found)
+	}
+}

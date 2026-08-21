@@ -2,6 +2,7 @@ package audit
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,13 +64,31 @@ type matcher struct {
 	re    *regexp.Regexp
 	raw   string
 	group string
+	lit   string // ASCII-lowercased literal term, "" for a regex rule (see scanFilter)
 }
 
 func literalMatcher(s string) (matcher, bool) {
 	if strings.TrimSpace(s) == "" {
 		return matcher{}, false
 	}
-	return matcher{re: regexp.MustCompile("(?i)" + regexp.QuoteMeta(s)), raw: s}, true
+	m := matcher{re: regexp.MustCompile("(?i)" + regexp.QuoteMeta(s)), raw: s}
+	if low := strings.ToLower(s); isASCII(s) {
+		m.lit = low
+	}
+	return m, true
+}
+
+// isASCII reports whether s is pure ASCII, which is what makes a byte-wise
+// lowercase exactly equivalent to (?i) for it. A term with any non-ASCII rune
+// keeps its regexp in the prefilter rather than risk a Unicode fold a plain
+// ToLower would miss — a prefilter miss is a missed leak.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // regexMatcher compiles a user regexp case-insensitively by default: in a
@@ -99,6 +118,88 @@ type compiledLeaks struct {
 	deny  []matcher // global terms + regex — the config is the sole source of rules
 	allow []matcher // global allow + allow_regex
 	dirs  []compiledDir
+}
+
+// scanFilter answers "could this file contain ANY deny match at all" in one pass
+// over the whole file, so the per-line loop — which costs one FindAllStringIndex
+// per rule per line — runs only on the rare file that has a candidate. That loop
+// is the whole cost of the leaks check: on a repo of ~14M tracked lines with 14
+// rules it was ~250M regexp calls and ~25s, versus ~0.3s for every other check
+// combined.
+//
+// It must never be NARROWER than the rules it stands in for — a false negative
+// here is a missed leak, silently. Two guarantees keep it a superset: a literal
+// term is prefiltered by case-folded substring search only when it is pure ASCII
+// (where a byte-wise lowercase is exactly what (?i) does), and every other rule
+// is kept verbatim in an alternation of its own compiled pattern.
+type scanFilter struct {
+	lits []string       // ASCII-lowercased literal terms
+	re   *regexp.Regexp // alternation of every remaining rule; nil when there are none
+}
+
+// newScanFilter splits a deny set into the two prefilter strategies. A rule whose
+// pattern fails to compile as part of the alternation is impossible here (each
+// already compiled alone), but a nil re degrades to "no regex prefilter", which
+// only ever makes the filter wider.
+func newScanFilter(deny []matcher) scanFilter {
+	var f scanFilter
+	var parts []string
+	for _, d := range deny {
+		if d.lit != "" {
+			f.lits = append(f.lits, d.lit)
+			continue
+		}
+		parts = append(parts, "(?:"+d.re.String()+")")
+	}
+	if len(parts) > 0 {
+		f.re, _ = regexp.Compile(strings.Join(parts, "|"))
+	}
+	return f
+}
+
+// mayMatch reports whether text could contain a deny match. False means no rule
+// can match anywhere in the file, so the per-line scan is skipped entirely.
+func (f scanFilter) mayMatch(text string) bool {
+	if len(f.lits) > 0 {
+		low := strings.ToLower(text)
+		for _, l := range f.lits {
+			if strings.Contains(low, l) {
+				return true
+			}
+		}
+	}
+	return f.re != nil && f.re.MatchString(text)
+}
+
+// errBinary marks a file the scan skips because its prefix looks binary. The
+// caller treats it exactly like an unreadable file.
+var errBinary = fmt.Errorf("binary file")
+
+// readTextFile reads a file for scanning, deciding binary-ness from a prefix so a
+// large binary is never fully read. looksBinary only ever inspected the first
+// 8000 bytes; reading the whole file to hand it those bytes cost the scan the
+// full size of every vendored archive, image and tarball in the repo on every
+// run (~800MB of the 1GB tracked in one real repo).
+func readTextFile(abs string) ([]byte, error) {
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	head := make([]byte, binaryProbeBytes)
+	n, err := io.ReadFull(f, head)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+	head = head[:n]
+	if looksBinary(head) {
+		return nil, errBinary
+	}
+	rest, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	return append(head, rest...), nil
 }
 
 // expandDirPath resolves a [[dir]] path key to a cleaned absolute path, expanding
@@ -208,9 +309,14 @@ func (c LeakConfig) compile() (compiledLeaks, error) {
 }
 
 // looksBinary reports whether a head chunk contains a NUL byte.
+// binaryProbeBytes is how much of a file decides whether it is binary. It is
+// also how much readTextFile reads before committing to the rest, so the two can
+// never disagree about which bytes the decision was made on.
+const binaryProbeBytes = 8000
+
 func looksBinary(b []byte) bool {
-	if len(b) > 8000 {
-		b = b[:8000]
+	if len(b) > binaryProbeBytes {
+		b = b[:binaryProbeBytes]
 	}
 	for _, c := range b {
 		if c == 0 {
@@ -254,6 +360,17 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 		return nil, err
 	}
 	var findings []LeakFinding
+	// One filter per distinct deny set. Nearly every file uses the full set; a
+	// [[dir]] that suppresses a group yields one more, built once and reused.
+	filters := map[string]scanFilter{}
+	filterFor := func(key string, deny []matcher) scanFilter {
+		if f, ok := filters[key]; ok {
+			return f
+		}
+		f := newScanFilter(deny)
+		filters[key] = f
+		return f
+	}
 	for _, f := range files {
 		if matchesIgnore(f, extraIgnores) {
 			continue
@@ -273,8 +390,14 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 			}
 			dirAllows = append(dirAllows, d.allow...)
 		}
-		deny := cl.deny
+		deny, denyKey := cl.deny, ""
 		if len(suppressed) > 0 {
+			groups := make([]string, 0, len(suppressed))
+			for g := range suppressed {
+				groups = append(groups, g)
+			}
+			sort.Strings(groups)
+			denyKey = strings.Join(groups, "\x00")
 			deny = nil
 			for _, m := range cl.deny {
 				if !suppressed[m.group] {
@@ -291,11 +414,15 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 		if len(dirAllows) > 0 {
 			allow = append(append([]matcher{}, cl.allow...), dirAllows...)
 		}
-		b, err := os.ReadFile(abs)
-		if err != nil || looksBinary(b) {
+		b, err := readTextFile(abs)
+		if err != nil {
 			continue
 		}
-		for i, line := range strings.Split(string(b), "\n") {
+		text := string(b)
+		if !filterFor(denyKey, deny).mayMatch(text) {
+			continue
+		}
+		for i, line := range strings.Split(text, "\n") {
 			findings = append(findings, scanLine(f, i+1, line, deny, allow)...)
 		}
 	}
@@ -315,11 +442,18 @@ func LeakScan(repoRoot string, cfg LeakConfig, extraIgnores []string) ([]LeakFin
 // span. A deny span [s,e) is covered iff some allow rule matches [as,ae) with
 // as<=s && ae>=e (e.g. `acme` inside an allowed `com.acme.viewer`).
 func scanLine(file string, lineNo int, line string, deny, allow []matcher) []LeakFinding {
+	// Allow spans are computed on first need, not up front: on the overwhelming
+	// majority of lines no deny rule matches, so eagerly running every allow rule
+	// was pure waste proportional to the allow-list size.
 	var allowSpans [][]int
-	for _, a := range allow {
-		allowSpans = append(allowSpans, a.re.FindAllStringIndex(line, -1)...)
-	}
+	allowScanned := false
 	covered := func(s, e int) bool {
+		if !allowScanned {
+			for _, a := range allow {
+				allowSpans = append(allowSpans, a.re.FindAllStringIndex(line, -1)...)
+			}
+			allowScanned = true
+		}
 		for _, sp := range allowSpans {
 			if sp[0] <= s && sp[1] >= e {
 				return true
