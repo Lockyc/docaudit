@@ -432,6 +432,13 @@ docs/" with zero config.
   resolves the repo root, calls `audit.RepoDocs` (or `audit.BuildGraphView` for
   `runGraph`, which also takes `--json`), and prints; always `return 0`), report
   format, `maybeLog` (opt-in usage logging side-channel).
+- **A GitRoot failure must report git's own stderr** (`gitError`,
+  `internal/audit/git.go` → `notARepo`, `main.go`). Linked worktrees otherwise
+  work untouched — `git -C` resolves a gitdir pointer natively — so the only
+  failure is a *dangling* pointer (main repo moved/pruned, or unreachable from a
+  sandbox), and it is indistinguishable from a plain non-repo: the dir has a
+  `.git`, and every git command fails. Stripping the parenthetical cause as noise
+  restores a message whose honest reading is "docgraph can't run in a worktree".
 - `internal/audit/views.go` — `RepoDocs` (the shared parse path behind the
   views), `CoversOf`, `IndexMarkdown`, `StaleDocs` + `parseReviewDays`.
 - `internal/audit/graph.go` — the two graphs: `BuildContentGraph`/`ContentGraph`

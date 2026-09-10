@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -8,18 +10,35 @@ import (
 	"strings"
 )
 
+// GitRoot resolves path's work-tree root. On failure the error carries git's own
+// stderr (gitError): a linked worktree whose `.git` gitdir pointer no longer
+// resolves fails here and is otherwise indistinguishable from "not a repo" —
+// only git's message names the pointer target as the cause.
 func GitRoot(path string) (string, error) {
 	out, err := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		return "", err
+		return "", gitError(err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitError replaces an exec failure with the stderr git wrote, when it wrote any.
+// exec.Cmd.Output() stashes it on *ExitError and it is the only place the real
+// cause appears; "exit status 128" on its own is worse than useless.
+func gitError(err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+	return err
 }
 
 func gitLines(root string, args ...string) ([]string, error) {
 	out, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
 	if err != nil {
-		return nil, err
+		return nil, gitError(err)
 	}
 	var lines []string
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -44,7 +63,7 @@ func untrackedMD(root string) ([]string, error) {
 func gitRawLines(root string, args ...string) ([]string, error) {
 	out, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
 	if err != nil {
-		return nil, err
+		return nil, gitError(err)
 	}
 	s := string(out)
 	s = strings.TrimSuffix(s, "\n") // drop only the trailing record separator

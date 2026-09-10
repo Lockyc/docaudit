@@ -496,6 +496,13 @@ error. `doc-drift` blocks: `0` clean (or loop-guard-silenced) · `2` on a
 dangling-reference or anchored-value finding (stderr) or on an error. `covers` /
 `index` / `stale` / `graph` are read-only: `0` always on success, `2` only on error.
 
+**Linked worktrees work** — docgraph shells out to `git -C`, which resolves a
+`.git` gitdir pointer natively; there is nothing to configure. A worktree whose
+pointer is *dangling* (its main repo was moved or pruned, or is unreachable from
+a sandbox) is the one case that fails, and the `not a git repository` report
+carries git's own explanation in parentheses so the dangling target is named
+rather than mistaken for "worktrees are unsupported".
+
 A clean run prints a single line (`docgraph: clean ✓ (N tracked .md, M reachable,
 0 findings)`), so a green pre-push gate doesn't bury the terminal. Only on a
 finding does the output turn self-describing — a banner, the sections that

@@ -18,6 +18,20 @@ import (
 	"github.com/lockyc/docgraph/v3/internal/audit"
 )
 
+// notARepo reports a GitRoot failure, appending git's own explanation when it
+// has one. The case that needs it: a linked worktree whose `.git` gitdir pointer
+// no longer resolves (main repo moved or pruned, or unreachable from a sandbox)
+// — the bare message reads as "docgraph can't run in a worktree", which is wrong
+// and unactionable, while git's stderr names the dangling pointer target.
+func notARepo(stderr io.Writer, path string, err error) int {
+	if msg := strings.TrimSpace(fmt.Sprint(err)); msg != "" && !strings.Contains(msg, "exit status") {
+		fmt.Fprintf(stderr, "docgraph: not a git repository: %s (%s)\n", path, msg)
+	} else {
+		fmt.Fprintf(stderr, "docgraph: not a git repository: %s\n", path)
+	}
+	return 2
+}
+
 type multiFlag []string
 
 func (m *multiFlag) String() string     { return "" }
@@ -103,8 +117,7 @@ func runInstallHook(args []string, stdout, stderr io.Writer) int {
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
-		fmt.Fprintf(stderr, "docgraph: not a git repository: %s\n", path)
-		return 2
+		return notARepo(stderr, path, err)
 	}
 	hookPath := filepath.Join(root, ".githooks", "pre-push")
 	if _, err := os.Stat(hookPath); err == nil && !*force {
@@ -288,8 +301,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
-		fmt.Fprintf(stderr, "docgraph: not a git repository: %s\n", path)
-		return 2
+		return notARepo(stderr, path, err)
 	}
 	rep, err := audit.Audit(root, audit.Options{ExtraRoots: roots, Ignores: ignores})
 	if err != nil {
@@ -667,8 +679,7 @@ func runFootgunDrift(args []string, stdout, stderr io.Writer) int {
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
-		fmt.Fprintf(stderr, "docgraph: not a git repository: %s\n", path)
-		return 2
+		return notARepo(stderr, path, err)
 	}
 	var ranges []audit.RevRange
 	if *rangeFlag != "" {
@@ -806,8 +817,7 @@ func runCoversDrift(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	}
 	root, err := audit.GitRoot(path)
 	if err != nil {
-		fmt.Fprintf(stderr, "docgraph: not a git repository: %s\n", path)
-		return 2
+		return notARepo(stderr, path, err)
 	}
 	var ranges []audit.RevRange
 	if *rangeFlag != "" {
@@ -1100,8 +1110,7 @@ func runCovers(args []string, stdout, stderr io.Writer) int {
 	}
 	root, err := audit.GitRoot(".")
 	if err != nil {
-		fmt.Fprintln(stderr, "docgraph: not a git repository")
-		return 2
+		return notARepo(stderr, ".", err)
 	}
 	docs, err := audit.RepoDocs(root, ignores)
 	if err != nil {
@@ -1126,8 +1135,7 @@ func runIndex(args []string, stdout, stderr io.Writer) int {
 	}
 	root, err := audit.GitRoot(".")
 	if err != nil {
-		fmt.Fprintln(stderr, "docgraph: not a git repository")
-		return 2
+		return notARepo(stderr, ".", err)
 	}
 	docs, err := audit.RepoDocs(root, ignores)
 	if err != nil {
@@ -1152,8 +1160,7 @@ func runStale(args []string, stdout, stderr io.Writer) int {
 	}
 	root, err := audit.GitRoot(".")
 	if err != nil {
-		fmt.Fprintln(stderr, "docgraph: not a git repository")
-		return 2
+		return notARepo(stderr, ".", err)
 	}
 	docs, err := audit.RepoDocs(root, ignores)
 	if err != nil {
@@ -1192,8 +1199,7 @@ func runGraph(args []string, stdout, stderr io.Writer) int {
 	} else {
 		root, gerr := audit.GitRoot(".")
 		if gerr != nil {
-			fmt.Fprintln(stderr, "docgraph: not a git repository")
-			return 2
+			return notARepo(stderr, ".", gerr)
 		}
 		v, err = audit.BuildGraphView(root, roots, ignores)
 	}

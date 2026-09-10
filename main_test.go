@@ -1263,3 +1263,38 @@ func TestFootgunDriftEchoIsRuneSafe(t *testing.T) {
 		t.Errorf("trimmed echo must stay valid UTF-8: %q", out.String())
 	}
 }
+
+// A linked worktree whose gitdir pointer no longer resolves (its main repo was
+// moved, pruned, or is unreachable from a sandbox) is the one failure that looks
+// exactly like "you're not in a repo" — the dir has a `.git`, and every ordinary
+// git command still fails. Only git's own stderr names the pointer target, so
+// the report must carry it; without it the honest conclusion a user reaches is
+// "docgraph can't run in a worktree".
+func TestRunBrokenWorktreePointerNamesGitCause(t *testing.T) {
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	wt := filepath.Join(base, "wt")
+	os.MkdirAll(main, 0o755)
+	git := func(a ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", main}, a...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", a, err, out)
+		}
+	}
+	git("init")
+	os.WriteFile(filepath.Join(main, "README.md"), []byte("# r\n"), 0o644)
+	git("add", "README.md")
+	git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-m", "init")
+	git("worktree", "add", wt, "-b", "feature")
+	if err := os.Rename(main, filepath.Join(base, "moved")); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	code := run([]string{"--leaks-config", noCfg(base), wt}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "worktrees") {
+		t.Errorf("stderr does not name the dangling gitdir pointer:\n%s", errb.String())
+	}
+}
