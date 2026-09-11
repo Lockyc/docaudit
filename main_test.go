@@ -1294,7 +1294,11 @@ func TestRunBrokenWorktreePointerNamesGitCause(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2\n%s%s", code, out.String(), errb.String())
 	}
-	if !strings.Contains(errb.String(), "worktrees") {
-		t.Errorf("stderr does not name the dangling gitdir pointer:\n%s", errb.String())
+	// Assert git's OWN message is carried through, not that it names the gitdir
+	// path: git versions disagree on that detail (macOS git prints the worktrees
+	// path, Ubuntu's prints "(null)"), and the invariant this test guards is the
+	// parenthesised cause existing at all — before the fix there was none.
+	if !strings.Contains(errb.String(), "(fatal:") {
+		t.Errorf("stderr does not carry git's own cause:\n%s", errb.String())
 	}
 }
